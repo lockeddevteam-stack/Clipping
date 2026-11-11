@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#0E0B09">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Step Test</title>
+<style>
+:root{
+  --bg:#0E0B09; --card:rgba(246,238,231,.055); --line:rgba(246,238,231,.09);
+  --text:#F6EEE7; --text2:rgba(246,238,231,.64); --text3:rgba(246,238,231,.42);
+  --accent:#FF7A1A; --good:#4CD38A; --warn:#FFC857; --bad:#FF5A5F; --heart:#FF375F;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",system-ui,"Segoe UI",Roboto,sans-serif;
+  --num:ui-rounded,"SF Pro Rounded",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{margin:0;background:radial-gradient(120% 55% at 0% 0%,#2b1a0f 0%,transparent 55%),var(--bg);color:var(--text);font:17px/1.45 var(--sans);-webkit-font-smoothing:antialiased;letter-spacing:-.01em}
+.app{min-height:100%;max-width:480px;margin:0 auto;display:flex;flex-direction:column;
+  padding:calc(env(safe-area-inset-top,0px) + 22px) max(20px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 22px) max(20px,env(safe-area-inset-left,0px))}
+.lab{font:600 11px/1.2 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--text3)}
+h1{font:800 34px/1.05 var(--sans);letter-spacing:-.03em;margin:6px 0 0;text-wrap:balance}
+.sub{color:var(--text2);margin:10px 0 0;font-size:16px;text-wrap:pretty}
+.view{display:flex;flex-direction:column;gap:16px;flex:1;animation:in .35s cubic-bezier(.2,.9,.25,1)}
+@keyframes in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:16px}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:14px}
+.steps li{display:flex;gap:12px;font-size:15px;color:var(--text2);line-height:1.4}
+.steps li b{color:var(--text);font-weight:650}
+.steps i{flex:none;width:24px;height:24px;border-radius:50%;background:rgba(255,122,26,.16);color:var(--accent);display:grid;place-items:center;font:700 13px var(--num);font-style:normal}
+.spacer{flex:1}
+.btn{appearance:none;border:0;width:100%;border-radius:999px;padding:17px 20px;font:700 17px var(--sans);letter-spacing:-.01em;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:transform .12s,opacity .2s}
+.btn:active{transform:scale(.98)}
+.btn:disabled{opacity:.4}
+.btn--go{background:var(--accent);color:#1a0d04}
+.btn--soft{background:rgba(246,238,231,.08);color:var(--text)}
+.btn--stop{background:rgba(255,90,95,.16);color:var(--bad)}
+.link{background:none;border:0;color:var(--text2);font:600 15px var(--sans);padding:10px;cursor:pointer;text-decoration:underline;text-underline-offset:3px;text-decoration-color:rgba(246,238,231,.25)}
+.btn:focus-visible,.link:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.foot{font-size:13px;color:var(--text3);text-align:center;margin:0;text-wrap:balance}
+.band{display:flex;align-items:center;gap:12px}
+.band .dot{width:10px;height:10px;border-radius:50%;background:var(--good);box-shadow:0 0 0 4px rgba(76,211,138,.18);flex:none}
+.band b{display:block;font-size:17px}
+.band span{font-size:13px;color:var(--text3)}
+.band .hr{margin-left:auto;text-align:right}
+.band .hr b{font:800 22px/1 var(--num);color:var(--heart);font-variant-numeric:tabular-nums}
+[hidden]{display:none!important}
+.ring{position:relative;width:min(78vw,300px);aspect-ratio:1;margin:8px auto 0}
+.ring svg{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg)}
+.ring .mid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.ring .big{font:800 88px/1 var(--num);letter-spacing:-.04em;font-variant-numeric:tabular-nums;transition:transform .12s}
+.ring .big.pop{transform:scale(1.06)}
+.ring .unit{font-size:15px;font-weight:650;color:var(--text3);margin-top:4px}
+.ring .time{font:700 17px var(--num);color:var(--text2);margin-top:10px;font-variant-numeric:tabular-nums}
+canvas{display:block;width:100%;height:84px}
+.meta{display:flex;justify-content:space-between;font-size:12.5px;color:var(--text3);margin-top:6px;font-variant-numeric:tabular-nums}
+.result{text-align:center}
+.result .big{font:800 72px/1 var(--num);letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.field{display:flex;flex-direction:column;gap:8px}
+.field label{font-size:15px;font-weight:650}
+.stepper{display:flex;align-items:center;gap:10px}
+.stepper button{flex:none;width:52px;height:52px;border-radius:16px;border:0;background:rgba(246,238,231,.08);color:var(--text);font:600 24px var(--num);cursor:pointer}
+.stepper input{flex:1;min-width:0;height:52px;border-radius:16px;border:1px solid var(--line);background:rgba(246,238,231,.05);color:var(--text);font:800 26px var(--num);text-align:center;-moz-appearance:textfield}
+.stepper input::-webkit-outer-spin-button,.stepper input::-webkit-inner-spin-button{-webkit-appearance:none}
+.msg{border-radius:16px;padding:12px 14px;font-size:14.5px;line-height:1.4}
+.msg--warn{background:rgba(255,200,87,.12);color:var(--warn)}
+.msg--bad{background:rgba(255,90,95,.12);color:#FF8E91}
+.msg--good{background:rgba(76,211,138,.12);color:var(--good)}
+.spin{width:44px;height:44px;border-radius:50%;border:3px solid rgba(246,238,231,.12);border-top-color:var(--accent);animation:sp .9s linear infinite;margin:40px auto 14px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.center{text-align:center}
+.tick{width:72px;height:72px;border-radius:50%;background:rgba(76,211,138,.15);color:var(--good);display:grid;place-items:center;margin:34px auto 6px}
+.copyrow{display:flex;gap:8px;align-items:center;background:rgba(246,238,231,.05);border:1px solid var(--line);border-radius:14px;padding:10px 12px;font:13px var(--mono);color:var(--text2);word-break:break-all}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script>
+(function () {
+  'use strict';
+  var SVC = '61080001-8d6d-82b8-614a-1c8cb0f8dcc6';
+  var CMD = '61080002-8d6d-82b8-614a-1c8cb0f8dcc6';
+  var REPLY = '61080003-8d6d-82b8-614a-1c8cb0f8dcc6';
+  var DATA = '61080005-8d6d-82b8-614a-1c8cb0f8dcc6';
+  var UPLOAD = 'https://fwimdnukebbrwpwdyjbv.supabase.co/functions/v1/steptest';
+  var LENGTH = 300, NO_DATA = 15;
+  var PENDING_KEY = 'steptest.pending';
+
+  // ---------- band protocol ----------
+  function crc8(b) { var c = 0; for (var i = 0; i < b.length; i++) { c ^= b[i]; for (var k = 0; k < 8; k++) c = (c & 0x80) ? ((c << 1) ^ 0x07) & 0xff : (c << 1) & 0xff; } return c; }
+  var T = (function () { var t = new Uint32Array(256); for (var i = 0; i < 256; i++) { var c = i; for (var k = 0; k < 8; k++) c = (c & 1) ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[i] = c >>> 0; } return t; })();
+  function crc32(b) { var c = 0xFFFFFFFF; for (var i = 0; i < b.length; i++) c = T[(c ^ b[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+  var seq = 0;
+  function packet(cmd, args) {
+    seq = (seq + 1) & 0xff;
+    var p = [0x23, seq, cmd].concat(args), len = p.length + 4, lb = [len & 0xff, len >> 8];
+    var c = crc32(p), out = [0xAA].concat(lb, [crc8(lb)], p, [c & 0xff, (c >>> 8) & 0xff, (c >>> 16) & 0xff, (c >>> 24) & 0xff]);
+    return new Uint8Array(out);
+  }
+  var IMU = 0x6A; // motion stream on/off. Nothing else is ever sent to the band.
+  function Reassembler() { this.buf = []; }
+  Reassembler.prototype.feed = function (bytes) {
+    var buf = this.buf, out = [];
+    for (var i = 0; i < bytes.length; i++) buf.push(bytes[i]);
+    for (;;) {
+      while (buf.length && buf[0] !== 0xAA) buf.shift();
+      if (buf.length < 4) break;
+      if (crc8([buf[1], buf[2]]) !== buf[3]) { buf.shift(); continue; }
+      var len = buf[1] | (buf[2] << 8);
+      if (len < 5 || len > 4096) { buf.shift(); continue; }
+      var total = 4 + len;
+      if (buf.length < total) break;
+      var inner = buf.slice(4, total - 4);
+      var got = (buf[total - 4] | (buf[total - 3] << 8) | (buf[total - 2] << 16) | (buf[total - 1] << 24)) >>> 0;
+      if (crc32(inner) === got) out.push(inner);
+      buf.splice(0, total);
+    }
+    if (buf.length > 8192) buf.length = 0;
+    return out;
+  };
+  function hex(a) { var s = ''; for (var i = 0; i < a.length; i++) s += (a[i] < 16 ? '0' : '') + a[i].toString(16); return s; }
+  function i16(b, o) { var v = b[o] | (b[o + 1] << 8); return (v & 0x8000 ? v - 0x10000 : v) / 4096; }
+
+  // ---------- state ----------
+  var S = {
+    view: navigator.bluetooth ? 'intro' : 'nobt',
+    device: null, cmd: null, name: '', battery: null, bpm: null,
+    running: false, t0: 0, frames: [], n: 0, steps: 0, stepAt: [], mags: [],
+    smooth: [], prev: 0, rising: false, last: -1e9,
+    timer: null, msg: null, counted: 100, saving: false, savedId: null, reasm: new Reassembler()
+  };
+  var $ = function (id) { return document.getElementById(id); };
+  var app = $('app');
+
+  function render() {
+    var v = S.view, h = '';
+    if (v === 'nobt') {
+      h = '<div class="view"><div><div class="lab">Band · Step test</div><h1>Open this in Bluefy</h1>' +
+        '<p class="sub">Safari can\'t talk to your band. Bluefy is a free browser that can.</p></div>' +
+        '<div class="card"><ol class="steps"><li><i>1</i><span>Get <b>Bluefy – Web BLE Browser</b> from the App Store.</span></li>' +
+        '<li><i>2</i><span>Open this page in it.</span></li></ol></div>' +
+        '<div class="copyrow" id="url">' + location.href.replace(/[<>&]/g, '') + '</div>' +
+        '<button class="btn btn--soft" id="copy">Copy link</button><div class="spacer"></div></div>';
+    } else if (v === 'intro') {
+      h = '<div class="view"><div><div class="lab">Band · Step test</div><h1>Count your steps with your band</h1>' +
+        '<p class="sub">Walk 100 steps. The band records how your wrist moves, and that teaches LOCKED to count steps on its own.</p></div>' +
+        '<div class="card"><ol class="steps">' +
+        '<li><i>1</i><span><b>Close the Band app</b> so your band is free to connect here.</span></li>' +
+        '<li><i>2</i><span><b>Connect</b>, then pick your WHOOP from the list.</span></li>' +
+        '<li><i>3</i><span>Stand still, tap Start, then <b>walk exactly 100 steps</b> counting out loud.</span></li>' +
+        '<li><i>4</i><span>Stand still again and tap Stop.</span></li></ol></div>' +
+        msgHTML() + '<div class="spacer"></div>' + pendingHTML() +
+        '<button class="btn btn--go" id="connect">Connect your band</button>' +
+        '<button class="link" id="all">Band not in the list? Show every device</button></div>';
+    } else if (v === 'connecting') {
+      h = '<div class="view center"><div class="spin"></div><div class="lab">Connecting</div><p class="sub">Keep your band close to your phone.</p></div>';
+    } else if (v === 'ready') {
+      h = '<div class="view"><div><div class="lab">Band · Step test</div><h1>Ready when you are</h1></div>' + bandHTML() +
+        '<div class="card"><ol class="steps"><li><i>1</i><span>Stand still with your arms relaxed.</span></li>' +
+        '<li><i>2</i><span>Tap Start, then walk <b>exactly 100 steps</b>, counting out loud.</span></li>' +
+        '<li><i>3</i><span>Stand still for a few seconds, then tap Stop.</span></li>' +
+        '<li><i>4</i><span>Hold your phone and keep the screen on. If it locks, the test stops.</span></li></ol></div>' + msgHTML() +
+        '<div class="spacer"></div><button class="btn btn--go" id="start">Start the test</button>' +
+        '<p class="foot">Stops by itself after 5 minutes. Your band goes back to normal right after.</p></div>';
+    } else if (v === 'running') {
+      h = '<div class="view"><div class="band" style="justify-content:space-between"><div class="lab" style="color:var(--accent)">● Recording</div>' +
+        '<div class="lab" id="hzlab">Waiting for the band…</div></div>' +
+        '<div class="ring"><svg viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="54" fill="none" stroke="rgba(246,238,231,.08)" stroke-width="7"/>' +
+        '<circle id="arc" cx="60" cy="60" r="54" fill="none" stroke="var(--accent)" stroke-width="7" stroke-linecap="round" stroke-dasharray="339.3" stroke-dashoffset="0"/></svg>' +
+        '<div class="mid"><div class="big" id="cnt">0</div><div class="unit">steps</div><div class="time" id="left">5:00</div></div></div>' +
+        '<div class="card" style="padding:12px 14px"><canvas id="wave" width="800" height="168" aria-label="Your wrist movement, live"></canvas>' +
+        '<div class="meta"><span>Wrist movement</span><span id="bpm">' + (S.bpm ? S.bpm + ' bpm' : '') + '</span></div></div>' +
+        '<div class="spacer"></div><button class="btn btn--stop" id="stop">Stop</button></div>';
+    } else if (v === 'done') {
+      h = '<div class="view"><div class="result"><div class="lab" style="margin-top:12px">The band counted</div><div class="big">' + S.steps + '</div>' +
+        '<p class="sub" style="margin-top:6px">' + fmtSecs(S.secs) + ' · ' + S.n.toLocaleString() + ' movement readings</p></div>' + msgHTML() +
+        '<div class="card field"><label for="counted">How many steps did you actually take?</label>' +
+        '<div class="stepper"><button id="minus" aria-label="One less">−</button><input id="counted" type="number" inputmode="numeric" min="1" max="5000" value="' + S.counted + '"><button id="plus" aria-label="One more">+</button></div></div>' +
+        '<div class="spacer"></div><button class="btn btn--go" id="save"' + (S.saving ? ' disabled' : '') + '>' + (S.saving ? 'Saving…' : 'Save the test') + '</button>' +
+        '<button class="link" id="again">Discard and try again</button></div>';
+    } else if (v === 'saved') {
+      h = '<div class="view center"><div class="tick"><svg width="34" height="34" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>' +
+        '<h1 style="font-size:28px">Saved</h1><p class="sub">You counted ' + S.counted + ', the band counted ' + S.steps + '. Claude will tune the counter from this walk.</p>' +
+        '<div class="spacer"></div><button class="btn btn--soft" id="again">Run another test</button>' +
+        '<p class="foot">Open the Band app again when you\'re done, so your heart rate keeps recording.</p></div>';
+    }
+    app.innerHTML = h;
+    bind();
+  }
+  function fmtSecs(s) { s = Math.round(s || 0); return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2) + ' recorded'; }
+  function msgHTML() { return S.msg ? '<div class="msg msg--' + S.msg[0] + '" role="status">' + S.msg[1] + '</div>' : ''; }
+  function bandHTML() {
+    return '<div class="card band"><span class="dot"></span><div><b>' + esc(S.name || 'WHOOP') + '</b><span>Connected' + (S.battery != null ? ' · ' + S.battery + '% battery' : '') + '</span></div>' +
+      '<div class="hr"' + (S.bpm ? '' : ' hidden') + ' id="hrbox"><b id="bpm2">' + (S.bpm || '') + '</b><span style="display:block;font-size:12px;color:var(--text3)">bpm</span></div></div>';
+  }
+  function pendingHTML() {
+    var p = loadPending();
+    return p ? '<div class="msg msg--warn">One test didn\'t send. <button class="link" id="resend" style="color:inherit;padding:0 0 0 4px">Send it now</button></div>' : '';
+  }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function on(id, ev, f) { var e = $(id); if (e) e.addEventListener(ev, f); }
+
+  function bind() {
+    on('copy', 'click', function () {
+      var t = location.href;
+      (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { $('copy').textContent = 'Copied'; }, function () {
+        var r = document.createRange(); r.selectNodeContents($('url')); var s = getSelection(); s.removeAllRanges(); s.addRange(r);
+      });
+    });
+    on('connect', 'click', function () { connect(false); });
+    on('all', 'click', function () { connect(true); });
+    on('start', 'click', start);
+    on('stop', 'click', function () { stop(null); });
+    on('again', 'click', function () { S.msg = null; S.view = S.cmd ? 'ready' : 'intro'; render(); });
+    on('minus', 'click', function () { setCounted(S.counted - 1); });
+    on('plus', 'click', function () { setCounted(S.counted + 1); });
+    on('counted', 'input', function (e) { var v = parseInt(e.target.value, 10); if (v > 0) S.counted = v; });
+    on('save', 'click', save);
+    on('resend', 'click', function () { var p = loadPending(); if (p) send(p, true); });
+  }
+  function setCounted(v) { S.counted = Math.max(1, Math.min(5000, v | 0)); var i = $('counted'); if (i) i.value = S.counted; }
+
+  // ---------- connect ----------
+  function connect(all) {
+    S.msg = null;
+    var opts = all ? { acceptAllDevices: true, optionalServices: [SVC, 'heart_rate', 'battery_service'] }
+      : { filters: [{ services: [SVC] }, { namePrefix: 'WHOOP' }, { namePrefix: 'Whoop' }], optionalServices: [SVC, 'heart_rate', 'battery_service'] };
+    navigator.bluetooth.requestDevice(opts).then(function (dev) {
+      S.device = dev; S.name = dev.name || 'WHOOP'; S.view = 'connecting'; render();
+      dev.addEventListener('gattserverdisconnected', lost);
+      return dev.gatt.connect();
+    }).then(function (g) {
+      return g.getPrimaryService(SVC).then(function (svc) {
+        return Promise.all([svc.getCharacteristic(CMD), svc.getCharacteristic(DATA), svc.getCharacteristic(REPLY).catch(function () { return null; })]);
+      }).then(function (c) {
+        S.cmd = c[0];
+        c[1].addEventListener('characteristicvaluechanged', onData);
+        return c[1].startNotifications().then(function () { return c[2] ? c[2].startNotifications().catch(function () {}) : null; });
+      }).then(function () {
+        return write(false); // switch any motion stream left running off before anything else
+      }).then(function () {
+        extras(g);
+        S.view = 'ready'; render();
+      });
+    }).catch(function (e) {
+      if (e && e.name === 'NotFoundError') { S.msg = null; S.view = 'intro'; render(); return; } // closed the picker
+      S.view = 'intro';
+      S.msg = ['bad', (e && /service/i.test(String(e.message)))
+        ? 'That device isn\'t a WHOOP band. Pick the one named WHOOP.'
+        : 'Couldn\'t connect. Close the Band app fully (swipe it away), keep the band close, and try again.'];
+      try { if (S.device && S.device.gatt.connected) S.device.gatt.disconnect(); } catch (x) {}
+      render();
+    });
+  }
+  function extras(g) {
+    g.getPrimaryService('battery_service').then(function (s) { return s.getCharacteristic('battery_level'); }).then(function (c) { return c.readValue(); })
+      .then(function (v) { S.battery = v.getUint8(0); if (S.view === 'ready') render(); }).catch(function () {});
+    g.getPrimaryService('heart_rate').then(function (s) { return s.getCharacteristic('heart_rate_measurement'); }).then(function (c) {
+      c.addEventListener('characteristicvaluechanged', function (e) {
+        var d = e.target.value, f = d.getUint8(0), bpm = (f & 1) ? d.getUint16(1, true) : d.getUint8(1);
+        if (bpm > 25 && bpm < 240) { S.bpm = bpm; var a = $('bpm'), b = $('bpm2'); if (a) a.textContent = bpm + ' bpm'; if (b) b.textContent = bpm; var hb = $('hrbox'); if (hb) hb.hidden = false; }
+      });
+      return c.startNotifications();
+    }).catch(function () {});
+  }
+  function write(onOff) {
+    var c = S.cmd; if (!c) return Promise.resolve();
+    var p = packet(IMU, [onOff ? 1 : 0]);
+    var w = c.properties && c.properties.write && c.writeValueWithResponse ? c.writeValueWithResponse(p)
+      : c.writeValueWithoutResponse ? c.writeValueWithoutResponse(p) : c.writeValue(p);
+    return w.catch(function () {});
+  }
+  function lost() {
+    S.cmd = null;
+    if (S.running) {
+      finish(['warn', 'Your band disconnected, so the test stopped. Its motion stream switches off the next time it connects.']);
+    } else if (S.view === 'ready' || S.view === 'connecting') {
+      S.view = 'intro'; S.msg = ['warn', 'Your band disconnected. Connect again to continue.']; render();
+    }
+  }
+
+  // ---------- test ----------
+  function start() {
+    if (!S.cmd) return;
+    S.frames = []; S.n = 0; S.steps = 0; S.stepAt = []; S.mags = []; S.smooth = []; S.prev = 0; S.rising = false; S.last = -1e9;
+    S.msg = null; S.reasm = new Reassembler(); S.t0 = Date.now(); S.running = true; S.view = 'running'; render();
+    write(true);
+    S.timer = setInterval(tick, 250);
+    try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then(function (l) { S.lock = l; }, function () {}); } catch (e) {}
+    draw();
+  }
+  function tick() {
+    var el = (Date.now() - S.t0) / 1000, left = Math.max(0, LENGTH - el);
+    var l = $('left'); if (l) l.textContent = Math.floor(left / 60) + ':' + ('0' + Math.floor(left % 60)).slice(-2);
+    var a = $('arc'); if (a) a.setAttribute('stroke-dashoffset', (339.3 * (1 - left / LENGTH)).toFixed(1));
+    var hz = $('hzlab'); if (hz && S.n) hz.textContent = Math.round(S.n / el) + ' readings a second';
+    if (left <= 0) stop(null);
+    else if (el > NO_DATA && S.n === 0) stop(['warn', 'Your band didn\'t send any movement, so nothing was recorded. It\'s back to normal. Try once more, and if it happens again tell Claude.']);
+  }
+  function stop(msg) { if (!S.running) return; write(false); finish(msg); }
+  function finish(msg) {
+    S.running = false; clearInterval(S.timer); S.timer = null;
+    try { if (S.lock) S.lock.release(); } catch (e) {} S.lock = null;
+    S.secs = (Date.now() - S.t0) / 1000;
+    S.msg = msg;
+    if (S.n === 0) { S.view = S.cmd ? 'ready' : 'intro'; if (!msg) S.msg = ['warn', 'Nothing was recorded. Try again.']; }
+    else S.view = 'done';
+    render();
+  }
+  function onData(e) {
+    var v = e.target.value, b = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+    var pk = S.reasm.feed(b);
+    for (var i = 0; i < pk.length; i++) if (pk[i][0] === 0x33 && pk[i].length >= 84 && S.running) frame(pk[i]);
+  }
+  function frame(b) {
+    S.frames.push([Date.now(), hex(b)]);
+    var el = Math.max(0.5, (Date.now() - S.t0) / 1000), hz = Math.max(10, (S.n + 10) / el);
+    var k = Math.max(1, Math.round(hz / 12)), win = Math.max(5, Math.round(hz)), gap = Math.round(hz * 0.28), found = 0;
+    for (var i = 0; i < 10; i++) {
+      var x = i16(b, 24 + 2 * i), y = i16(b, 44 + 2 * i), z = i16(b, 64 + 2 * i), m = Math.sqrt(x * x + y * y + z * z);
+      S.n++; S.mags.push(m); if (S.mags.length > 600) S.mags.shift();
+      S.smooth.push(m); if (S.smooth.length > win) S.smooth.splice(0, S.smooth.length - win);
+      var tl = S.smooth.slice(-k), s = 0, base = 0, j;
+      for (j = 0; j < tl.length; j++) s += tl[j]; s /= tl.length;
+      for (j = 0; j < S.smooth.length; j++) base += S.smooth[j]; base /= S.smooth.length;
+      if (s < S.prev && S.rising && S.prev > base + 0.07 && S.n - S.last >= gap) { found++; S.last = S.n; S.stepAt.push(S.n); }
+      S.rising = s > S.prev; S.prev = s;
+    }
+    if (found) { S.steps += found; var c = $('cnt'); if (c) { c.textContent = S.steps; c.classList.add('pop'); setTimeout(function () { c.classList.remove('pop'); }, 110); } }
+  }
+  function draw() {
+    if (!S.running) return;
+    var cv = $('wave');
+    if (cv) {
+      var x = cv.getContext('2d'), w = cv.width, h = cv.height, d = S.mags;
+      x.clearRect(0, 0, w, h);
+      x.strokeStyle = 'rgba(246,238,231,.08)'; x.lineWidth = 2; x.beginPath(); x.moveTo(0, h / 2); x.lineTo(w, h / 2); x.stroke();
+      if (d.length > 2) {
+        var lo = 0.4, hi = 1.8;
+        x.strokeStyle = '#FF7A1A'; x.lineWidth = 3.5; x.lineJoin = 'round'; x.beginPath();
+        for (var i = 0; i < d.length; i++) {
+          var px = w - (d.length - 1 - i) * (w / 599), py = h - (Math.min(hi, Math.max(lo, d[i])) - lo) / (hi - lo) * h;
+          i ? x.lineTo(px, py) : x.moveTo(px, py);
+        }
+        x.stroke();
+      }
+    }
+    requestAnimationFrame(draw);
+  }
+
+  // ---------- save ----------
+  function save() {
+    var i = $('counted'); if (i) { var v = parseInt(i.value, 10); if (v > 0) S.counted = Math.min(5000, v); }
+    var body = { counted: S.counted, detected: S.steps, hz: Math.round(S.n / Math.max(1, S.secs) * 10) / 10, startedAt: S.t0, seconds: Math.round(S.secs),
+      device: S.name, steps: S.stepAt, frames: S.frames };
+    try { localStorage.setItem(PENDING_KEY, JSON.stringify(body)); } catch (e) {}
+    send(body, false);
+  }
+  function send(body, fromIntro) {
+    S.saving = true; if (!fromIntro) render();
+    fetch(UPLOAD, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok || !j.ok) throw j; return j; }); })
+      .then(function (j) {
+        try { localStorage.removeItem(PENDING_KEY); } catch (e) {}
+        S.saving = false; S.savedId = j.id; S.counted = body.counted; S.steps = body.detected; S.msg = null; S.view = 'saved'; render();
+      }).catch(function (e) {
+        S.saving = false;
+        S.msg = ['bad', e && e.error === 'slow_down' ? 'That\'s a lot of tests for one day. Try again tomorrow.' : 'Couldn\'t send it. Your test is kept on this phone. Check your connection and tap Save again.'];
+        if (!fromIntro) S.view = 'done';
+        render();
+      });
+  }
+  function loadPending() { try { var p = localStorage.getItem(PENDING_KEY); return p ? JSON.parse(p) : null; } catch (e) { return null; } }
+
+  // leaving mid-test: switch the stream off on the way out
+  addEventListener('pagehide', function () { if (S.running) write(false); });
+  document.addEventListener('visibilitychange', function () { if (document.hidden && S.running) stop(['warn', 'The test stopped because you left the page. Keep it open while you walk.']); });
+
+  render();
+})();
+</script>
+</body>
+</html>
