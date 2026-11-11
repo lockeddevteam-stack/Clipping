@@ -112,7 +112,7 @@ canvas{display:block;width:100%;height:84px}
     var c = crc32(p), out = [0xAA].concat(lb, [crc8(lb)], p, [c & 0xff, (c >>> 8) & 0xff, (c >>> 16) & 0xff, (c >>> 24) & 0xff]);
     return new Uint8Array(out);
   }
-  var IMU = 0x6A; // motion stream on/off. Nothing else is ever sent to the band.
+  var IMU = 0x6A, RAW = 0x3F; // the two motion streams, on/off. Nothing else is ever sent to the band.
   function Reassembler() { this.buf = []; }
   Reassembler.prototype.feed = function (bytes) {
     var buf = this.buf, out = [];
@@ -290,13 +290,22 @@ canvas{display:block;width:100%;height:84px}
       return c.startNotifications();
     }).catch(function () {});
   }
-  function write(onOff) {
-    var c = S.cmd; if (!c) return Promise.resolve();
-    var p = packet(IMU, [onOff ? 1 : 0]);
-    var w = c.properties && c.properties.write && c.writeValueWithResponse ? c.writeValueWithResponse(p)
-      : c.writeValueWithoutResponse ? c.writeValueWithoutResponse(p) : c.writeValue(p);
-    return w.catch(function () {});
+  // Send one command and wait up to 1.5 s for the band's verdict: 1 ok, 2 accepted for later, 0 refused, null no answer.
+  var pending = {};
+  function sendCmd(cmd, args) {
+    var c = S.cmd; if (!c) return Promise.resolve(null);
+    var p = packet(cmd, args), sq = seq;
+    return new Promise(function (res) {
+      pending[sq] = res;
+      setTimeout(function () { if (pending[sq]) { delete pending[sq]; res(null); } }, 1500);
+      var w = c.properties && c.properties.write && c.writeValueWithResponse ? c.writeValueWithResponse(p)
+        : c.writeValueWithoutResponse ? c.writeValueWithoutResponse(p) : c.writeValue(p);
+      w.catch(function () { if (pending[sq]) { delete pending[sq]; res(null); } });
+    });
   }
+  // Both motion streams off. 0x3F off is the documented switch that stays off across reconnects.
+  function allOff() { return sendCmd(IMU, [0]).then(function () { return sendCmd(RAW, [0]); }); }
+  function write(onOff) { return onOff ? Promise.resolve() : allOff(); }
   function lost() {
     S.cmd = null;
     if (S.running) {
@@ -311,7 +320,15 @@ canvas{display:block;width:100%;height:84px}
     if (!S.cmd) return;
     S.frames = []; S.n = 0; S.steps = 0; S.stepAt = []; S.mags = []; S.smooth = []; S.prev = 0; S.rising = false; S.last = -1e9;
     S.msg = null; S.detail = null; seen = {}; heard = []; S.t0 = Date.now(); S.running = true; S.view = 'running'; render();
-    write(true);
+    S.cmdLog = []; S.mode = null;
+    var log = function (name, st) { S.cmdLog.push(name + '=' + (st == null ? '-' : st)); return st; };
+    sendCmd(IMU, [1]).then(function (st) {
+      if (log('imu', st) === 1) return 'imu';
+      return sendCmd(IMU, [1, 1]).then(function (st2) {
+        if (log('imu2', st2) === 1) return 'imu2';
+        return sendCmd(RAW, [1]).then(function (st3) { log('raw', st3); return st3 === 1 || st3 === 2 ? 'raw' : 'none'; });
+      });
+    }).then(function (m) { S.mode = m; });
     S.timer = setInterval(tick, 250);
     try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then(function (l) { S.lock = l; }, function () {}); } catch (e) {}
     draw();
@@ -338,16 +355,30 @@ canvas{display:block;width:100%;height:84px}
     var v = e.target.value, b = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
     var pk = r.feed(b);
     for (var i = 0; i < pk.length; i++) {
-      if (S.running) note(uuid, pk[i]);
-      if (pk[i][0] === 0x33 && pk[i].length >= 84 && S.running) frame(pk[i]);
+      var q = pk[i];
+      if (q[0] === 0x24 && pending[q[1]]) { var f = pending[q[1]]; delete pending[q[1]]; f(q.length > 4 ? q[4] : null); }
+      if (!S.running) continue;
+      note(uuid, q);
+      var smp = samplesOf(q);
+      if (smp) frame(q, smp);
     }
   }
-  function frame(b) {
+  // 0x33: 10 samples X@24 Y@44 Z@64. Raw R10 (0x2B, record 10): 100 samples X@85 Y@285 Z@485. int16, 4096 = 1 g.
+  function samplesOf(b) {
+    var n = 0, ox, oy, oz;
+    if (b[0] === 0x33 && b.length >= 84) { n = 10; ox = 24; oy = 44; oz = 64; }
+    else if (b[0] === 0x2B && b[1] === 0x0a && b.length >= 685) { n = 100; ox = 85; oy = 285; oz = 485; }
+    else return null;
+    var out = [];
+    for (var i = 0; i < n; i++) { var x = i16(b, ox + 2 * i), y = i16(b, oy + 2 * i), z = i16(b, oz + 2 * i); out.push(Math.sqrt(x * x + y * y + z * z)); }
+    return out;
+  }
+  function frame(b, smp) {
     S.frames.push([Date.now(), hex(b)]);
-    var el = Math.max(0.5, (Date.now() - S.t0) / 1000), hz = Math.max(10, (S.n + 10) / el);
+    var el = Math.max(0.5, (Date.now() - S.t0) / 1000), hz = Math.max(10, (S.n + smp.length) / el);
     var k = Math.max(1, Math.round(hz / 12)), win = Math.max(5, Math.round(hz)), gap = Math.round(hz * 0.28), found = 0;
-    for (var i = 0; i < 10; i++) {
-      var x = i16(b, 24 + 2 * i), y = i16(b, 44 + 2 * i), z = i16(b, 64 + 2 * i), m = Math.sqrt(x * x + y * y + z * z);
+    for (var i = 0; i < smp.length; i++) {
+      var m = smp[i];
       S.n++; S.mags.push(m); if (S.mags.length > 600) S.mags.shift();
       S.smooth.push(m); if (S.smooth.length > win) S.smooth.splice(0, S.smooth.length - win);
       var tl = S.smooth.slice(-k), s = 0, base = 0, j;
@@ -402,17 +433,17 @@ canvas{display:block;width:100%;height:84px}
   }
   // nothing to count: send what the band did say, so the next version can be right
   function diag() {
-    S.detail = 'heard: ' + seenText();
+    S.detail = 'band said: ' + (S.cmdLog || []).join(', ') + ' · heard: ' + seenText();
     render();
     var body = { counted: 0, detected: 0, hz: 0, startedAt: S.t0, seconds: Math.round((Date.now() - S.t0) / 1000), device: S.name,
-      note: 'diag ' + seenText(), frames: heard.length ? heard.map(function (h) { return [h[0], h[1].split('|')[1] || '00']; }) : [[Date.now(), '00']], steps: [] };
+      note: 'diag ' + (S.cmdLog || []).join(',') + ' ' + seenText(), frames: heard.length ? heard.map(function (h) { return [h[0], h[1].split('|')[1] || '00']; }) : [[Date.now(), '00']], steps: [] };
     body.note += ' chans:' + heard.map(function (h) { return h[1].split('|')[0]; }).join('');
     fetch(UPLOAD, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(function () {});
   }
   function loadPending() { try { var p = localStorage.getItem(PENDING_KEY); return p ? JSON.parse(p) : null; } catch (e) { return null; } }
 
   // leaving mid-test: switch the stream off on the way out
-  addEventListener('pagehide', function () { if (S.running) write(false); });
+  addEventListener('pagehide', function () { if (S.running) allOff(); });
   document.addEventListener('visibilitychange', function () { if (document.hidden && S.running) stop(['warn', 'The test stopped because you left the page. Keep it open while you walk.']); });
 
   render();
