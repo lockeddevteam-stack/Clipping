@@ -87,8 +87,18 @@ canvas{display:block;width:100%;height:84px}
   var CMD = '61080002-8d6d-82b8-614a-1c8cb0f8dcc6';
   var REPLY = '61080003-8d6d-82b8-614a-1c8cb0f8dcc6';
   var DATA = '61080005-8d6d-82b8-614a-1c8cb0f8dcc6';
+  var EVENTS = '61080004-8d6d-82b8-614a-1c8cb0f8dcc6', DIAG = '61080007-8d6d-82b8-614a-1c8cb0f8dcc6';
+  var LISTEN = [REPLY, EVENTS, DATA, DIAG];
+  // what the band sent, by channel and packet type, for when no motion arrives
+  var seen = {}, heard = [];
+  function note(ch, pk) {
+    var k = ch.slice(7, 8) + ':' + (pk[0] < 16 ? '0' : '') + pk[0].toString(16);
+    seen[k] = (seen[k] || 0) + 1;
+    if (heard.length < 400) heard.push([Date.now(), (ch.slice(7, 8) + '|' + hex(pk.slice(0, 590)))]);
+  }
+  function seenText() { var o = []; for (var k in seen) o.push(k + '×' + seen[k]); return o.join(' ') || 'nothing'; }
   var UPLOAD = 'https://fwimdnukebbrwpwdyjbv.supabase.co/functions/v1/steptest';
-  var LENGTH = 300, NO_DATA = 15;
+  var LENGTH = 300, NO_DATA = 20;
   var PENDING_KEY = 'steptest.pending';
 
   // ---------- band protocol ----------
@@ -240,11 +250,17 @@ canvas{display:block;width:100%;height:84px}
       S.stage = 'service';
       return g.getPrimaryService(SVC).then(function (svc) {
         S.stage = 'channels';
-        return Promise.all([svc.getCharacteristic(CMD), svc.getCharacteristic(DATA), svc.getCharacteristic(REPLY).catch(function () { return null; })]);
+        return Promise.all([svc.getCharacteristic(CMD)].concat(LISTEN.map(function (u) { return svc.getCharacteristic(u).catch(function () { return null; }); })));
       }).then(function (c) {
         S.cmd = c[0]; S.stage = 'listen';
-        c[1].addEventListener('characteristicvaluechanged', onData);
-        return c[1].startNotifications().then(function () { return c[2] ? c[2].startNotifications().catch(function () {}) : null; });
+        var subs = [];
+        c.slice(1).forEach(function (ch, i) {
+          if (!ch) return;
+          var r = new Reassembler(), uuid = LISTEN[i];
+          ch.addEventListener('characteristicvaluechanged', function (e) { onData(e, r, uuid); });
+          subs.push(ch.startNotifications().catch(function () {}));
+        });
+        return Promise.all(subs);
       }).then(function () {
         S.stage = 'command';
         return write(false); // switch any motion stream left running off before anything else
@@ -294,7 +310,7 @@ canvas{display:block;width:100%;height:84px}
   function start() {
     if (!S.cmd) return;
     S.frames = []; S.n = 0; S.steps = 0; S.stepAt = []; S.mags = []; S.smooth = []; S.prev = 0; S.rising = false; S.last = -1e9;
-    S.msg = null; S.reasm = new Reassembler(); S.t0 = Date.now(); S.running = true; S.view = 'running'; render();
+    S.msg = null; S.detail = null; seen = {}; heard = []; S.t0 = Date.now(); S.running = true; S.view = 'running'; render();
     write(true);
     S.timer = setInterval(tick, 250);
     try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then(function (l) { S.lock = l; }, function () {}); } catch (e) {}
@@ -306,7 +322,7 @@ canvas{display:block;width:100%;height:84px}
     var a = $('arc'); if (a) a.setAttribute('stroke-dashoffset', (339.3 * (1 - left / LENGTH)).toFixed(1));
     var hz = $('hzlab'); if (hz && S.n) hz.textContent = Math.round(S.n / el) + ' readings a second';
     if (left <= 0) stop(null);
-    else if (el > NO_DATA && S.n === 0) stop(['warn', 'Your band didn\'t send any movement, so nothing was recorded. It\'s back to normal. Try once more, and if it happens again tell Claude.']);
+    else if (el > NO_DATA && S.n === 0) { stop(['warn', 'Your band didn\'t send any movement. It\'s back to normal. What it did send went to Claude, who\'ll work out the next step.']); diag(); }
   }
   function stop(msg) { if (!S.running) return; write(false); finish(msg); }
   function finish(msg) {
@@ -318,10 +334,13 @@ canvas{display:block;width:100%;height:84px}
     else S.view = 'done';
     render();
   }
-  function onData(e) {
+  function onData(e, r, uuid) {
     var v = e.target.value, b = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
-    var pk = S.reasm.feed(b);
-    for (var i = 0; i < pk.length; i++) if (pk[i][0] === 0x33 && pk[i].length >= 84 && S.running) frame(pk[i]);
+    var pk = r.feed(b);
+    for (var i = 0; i < pk.length; i++) {
+      if (S.running) note(uuid, pk[i]);
+      if (pk[i][0] === 0x33 && pk[i].length >= 84 && S.running) frame(pk[i]);
+    }
   }
   function frame(b) {
     S.frames.push([Date.now(), hex(b)]);
@@ -380,6 +399,15 @@ canvas{display:block;width:100%;height:84px}
         if (!fromIntro) S.view = 'done';
         render();
       });
+  }
+  // nothing to count: send what the band did say, so the next version can be right
+  function diag() {
+    S.detail = 'heard: ' + seenText();
+    render();
+    var body = { counted: 0, detected: 0, hz: 0, startedAt: S.t0, seconds: Math.round((Date.now() - S.t0) / 1000), device: S.name,
+      note: 'diag ' + seenText(), frames: heard.length ? heard.map(function (h) { return [h[0], h[1].split('|')[1] || '00']; }) : [[Date.now(), '00']], steps: [] };
+    body.note += ' chans:' + heard.map(function (h) { return h[1].split('|')[0]; }).join('');
+    fetch(UPLOAD, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(function () {});
   }
   function loadPending() { try { var p = localStorage.getItem(PENDING_KEY); return p ? JSON.parse(p) : null; } catch (e) { return null; } }
 
