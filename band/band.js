@@ -577,7 +577,14 @@
     var known = api({ action: 'status' }).then(function (j) { if (j.band && j.band.last_minute) S.lockedTo = Date.parse(j.band.last_minute) + 60000; }, function () {});
     pump();
     send(0x23, [0], true).then(function () { return send(0x4C, [0], true); })
-      .then(function () { return send(0x22, [0], true); }).then(function (r) { r22 = r; clockFromRange(r); return send(0x43, [1], true); })
+      .then(function () { return send(0x22, [0], true); })
+      .then(function (r) { return r || pause(500).then(function () { return send(0x22, [0], true); }); })
+      .then(function (r) {
+        r22 = r;
+        // without the band's clock every time would be days off: stop here, nothing on the band changes
+        if (!r) { S.detail = report(); endSync(false, ['warn', 'Your band isn\'t answering yet. Close this page, turn Bluetooth off and on, then open it again.']); throw 'stop'; }
+        clockFromRange(r); return send(0x43, [1], true);
+      })
       .then(function () { return known; })
       .then(function () { return seek(s, r22); })
       .then(function () {
@@ -585,7 +592,7 @@
         s.started = s.seen = Date.now(); progress();
         send(0x16, [0], true);
         watch();
-      });
+      }).catch(function () {});
     function watch() {
       if (S.sync !== s || !s.running) return;
       // records are arriving but none can be read: stop and send samples instead of waiting forever
