@@ -557,6 +557,16 @@
     }).then(function () { S.probe = null; }, function () { S.probe = null; return back(); });
   }
 
+  // The band's clock can be days off. The newest record time in the data range reply is the band's "now",
+  // so the gap to the phone's clock is how far every record's time has to move.
+  function clockFromRange(r) {
+    if (!r || r.length < 68) return;
+    var best = 0;
+    for (var o = 40; o + 4 <= r.length; o += 8) { var v = u32(r, o); if (v > 1.6e9 && v < 2.2e9 && v > best) best = v; }
+    if (!best) return;
+    var off = Date.now() - best * 1000;
+    S.clockOff = Math.abs(off) > 120000 ? off : 0;
+  }
   function startSync() {
     if (!S.cmd || (S.sync && S.sync.running)) return;
     S.msg = null; S.detail = null; S.skipped = 0; DG = { replies: [], types: {}, raw: [], vers: {}, recs: [] };
@@ -567,7 +577,7 @@
     var known = api({ action: 'status' }).then(function (j) { if (j.band && j.band.last_minute) S.lockedTo = Date.parse(j.band.last_minute) + 60000; }, function () {});
     pump();
     send(0x23, [0], true).then(function () { return send(0x4C, [0], true); })
-      .then(function () { return send(0x22, [0], true); }).then(function (r) { r22 = r; return send(0x43, [1], true); })
+      .then(function () { return send(0x22, [0], true); }).then(function (r) { r22 = r; clockFromRange(r); return send(0x43, [1], true); })
       .then(function () { return known; })
       .then(function () { return seek(s, r22); })
       .then(function () {
