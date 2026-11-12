@@ -166,7 +166,7 @@
       var got = s.secs ? dur(s.secs) : '';
       return '<div class="card sync"><div class="lab" style="color:var(--accent)">Getting your band\'s history</div>' +
         '<div class="bar"><i id="barf" style="width:' + Math.round((s.pct || 0.04) * 100) + '%"></i></div>' +
-        '<div class="sline"><span id="sgot">' + (got ? got + ' received' : 'Starting…') + '</span><span id="ssaved">' + (s.savedTo ? 'saved to ' + when(s.savedTo) : '') + '</span></div></div>';
+        '<div class="sline"><span id="sgot">' + (got ? got + ' received' : 'Starting…') + '</span><span id="ssaved">' + (s.savedTo ? 'saved up to ' + when(s.savedTo) : '') + '</span></div></div>';
     }
     if (S.last && S.last.to) {
       return '<div class="card sync"><div class="lab">Up to date</div><div class="big">' + when(S.last.to) + '</div>' +
@@ -295,6 +295,7 @@
         // safe settings first: both motion streams off, live heart rate on
         return send(0x6A, [0]).then(function () { return send(0x3F, [0]); }).then(function () { return send(0x0E, [1]); })
           .then(function () { return send(0x0B, [], true); }).then(function (r) {
+            if (r) S.clockRaw = hx(r, 40);
             if (r && r.length >= 9) { var sec = u32(r, 5); if (sec > 1.6e9 && sec < 2.2e9) { var off = Date.now() - sec * 1000; S.clockOff = Math.abs(off) > 60000 ? off : 0; } }
           });
       });
@@ -344,9 +345,10 @@
     var ver = q[1], at = HR_AT[ver];
     DG.vers[ver + '/' + q.length] = (DG.vers[ver + '/' + q.length] || 0) + 1;
     if (DG.recs.length < 12 && (DG.vers[ver + '/' + q.length] <= 3)) DG.recs.push([Date.now(), 'r' + hx(q, 400)]);
-    if (at == null || q.length < Math.max(at + 1, 20)) return;
+    s.got++;
+    if (at == null || q.length < Math.max(at + 1, 20)) { s.bad++; return; }
     var hr = q[at], t = u32(q, 7) * 1000 + S.clockOff;
-    if (!(t > Date.now() - 30 * 864e5 && t < Date.now() + 36e5)) return;
+    if (!(t > 1.6e12 && t < Date.now() + 36e5)) { s.bad++; return; }
     if (hr && (hr < 25 || hr > 230)) hr = 0;
     var mk = Math.floor(t / 60000) * 60000, m = s.mins[mk];
     if (!m) { m = s.mins[mk] = { bpm: new Array(60).fill(0), rr: [] }; }
@@ -357,8 +359,16 @@
   }
   function meta(q) {
     var s = S.sync, sub = q[2]; s.seen = Date.now();
-    if (sub === 2 && q.length >= 21) {
+    if (sub === 1) { s.got = 0; s.bad = 0; }
+    else if (sub === 2 && q.length >= 21) {
       var tok = q.slice(13, 21);
+      if (s.bad) {
+        s.chain = s.chain.then(function () { return flush(true); }).then(function () {
+          S.detail = report();
+          endSync(false, ['warn', 'Part of your band\'s history didn\'t read right, so it stays on the band. Samples went to Claude to fix it.']);
+        });
+        return;
+      }
       s.chain = s.chain.then(function () { return flush(false); }).then(function (ok) {
         if (ok) return send(0x17, [0x01].concat(tok));
         endSync(false, ['bad', 'Couldn\'t save to LOCKED just now. Nothing is lost: your band keeps it until the next sync.']);
@@ -370,7 +380,7 @@
   function startSync() {
     if (!S.cmd || (S.sync && S.sync.running)) return;
     S.msg = null; S.detail = null; DG = { replies: [], types: {}, raw: [], vers: {}, recs: [] };
-    S.sync = { running: true, mins: {}, n: 0, secs: 0, first: 0, lastT: 0, savedTo: 0, days: {}, seen: Date.now(), chain: Promise.resolve(), started: Date.now() };
+    S.sync = { running: true, mins: {}, n: 0, got: 0, bad: 0, secs: 0, first: 0, lastT: 0, savedTo: 0, days: {}, seen: Date.now(), chain: Promise.resolve(), started: Date.now() };
     if (S.view === 'main') render();
     var s = S.sync;
     send(0x23, [0], true).then(function () { return pause(120); }).then(function () { return send(0x4C, [0], true); })
@@ -393,11 +403,12 @@
     var s = S.sync; if (!s) return;
     s.secs = s.n;
     var span = s.lastT && s.first ? (s.lastT - s.first) : 0, sinceLast = s.first && S.last && S.last.to ? Date.now() - Math.min(S.last.to, s.first) : 0;
-    s.pct = sinceLast ? Math.min(0.97, span / sinceLast) : Math.min(0.9, s.n / 86400);
+    s.pct = s.first ? Math.min(0.97, span / Math.max(1, Date.now() - s.first)) : 0;
+    if (sinceLast && s.first > Date.now() - 864e5) s.pct = Math.min(0.97, span / sinceLast);
     var g = $('sgot'), f = $('barf'), sv = $('ssaved');
     if (g) g.textContent = dur(s.secs) + ' received';
     if (f) f.style.width = Math.round(Math.max(0.04, s.pct) * 100) + '%';
-    if (sv) sv.textContent = s.savedTo ? 'saved to ' + when(s.savedTo) : '';
+    if (sv) sv.textContent = s.savedTo ? 'saved up to ' + when(s.savedTo) : '';
   }
   function tz() { return -new Date().getTimezoneOffset(); }
   function dayOf(ms) { var d = new Date(ms); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
@@ -417,7 +428,7 @@
       p = p.then(function (ok) {
         if (!ok) return false;
         var last = final && i === chunks.length - 1;
-        return tryApi({ minutes: c, device: dev, score: last ? { days: Object.keys(s.days).sort().slice(-7), tz_offset_min: tz() } : undefined }).then(function () {
+        return tryApi({ minutes: c, device: dev, score: last && recentDays(s).length ? { days: recentDays(s), tz_offset_min: tz() } : undefined }).then(function () {
           c.forEach(function (r) { delete s.mins[r[0]]; });
           s.savedTo = Math.max(s.savedTo, c[c.length - 1][0] + 60000); progress();
           return true;
@@ -426,7 +437,8 @@
     });
     return p;
   }
-  function score(s) { return tryApi({ score: { days: Object.keys(s.days).sort().slice(-7), tz_offset_min: tz() } }).then(function () { return true; }, function () { return true; }); }
+  function recentDays(s) { var lim = dayOf(Date.now() - 7 * 864e5); return Object.keys(s.days).filter(function (d) { return d >= lim; }).sort().slice(-7); }
+  function score(s) { var d = recentDays(s); if (!d.length) return Promise.resolve(true); return tryApi({ score: { days: d, tz_offset_min: tz() } }).then(function () { return true; }, function () { return true; }); }
   function tryApi(body, n) {
     n = n || 0;
     return api(body).catch(function (e) {
@@ -437,7 +449,7 @@
   }
   function report() {
     var t = [], vv = []; for (var k in DG.types) t.push(k + 'x' + DG.types[k]); for (var k2 in DG.vers) vv.push('v' + k2 + 'x' + DG.vers[k2]);
-    var line = 'band said: ' + DG.replies.slice(-12).join(' ') + ' · heard ' + (t.join(' ') || 'nothing') + (vv.length ? ' · records ' + vv.join(' ') : '');
+    var line = 'band said: ' + DG.replies.slice(-12).join(' ') + ' · heard ' + (t.join(' ') || 'nothing') + (vv.length ? ' · records ' + vv.join(' ') : '') + (S.clockRaw ? ' · clock ' + S.clockRaw : '');
     fetch('https://fwimdnukebbrwpwdyjbv.supabase.co/functions/v1/steptest', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ counted: 0, detected: 0, device: 'band-web ' + (S.name || ''), note: 'syncdiag ' + line,
         frames: DG.raw.concat(DG.recs).length ? DG.raw.concat(DG.recs).map(function (r) { return [r[0], r[1].replace(/[^0-9a-f]/g, '') || '00']; }) : [[Date.now(), '00']] }) }).catch(function () {});
