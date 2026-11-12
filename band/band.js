@@ -324,7 +324,7 @@
 
   // ---------- history ----------
   // what the band said, for a sync that gets nothing
-  var DG = { replies: [], types: {}, raw: [] };
+  var DG = { replies: [], types: {}, raw: [], vers: {}, recs: [] };
   function hx(a, n) { var s = ''; for (var i = 0; i < Math.min(a.length, n); i++) s += (a[i] < 16 ? '0' : '') + a[i].toString(16); return s; }
   function onData(u, v) {
     var b = new Uint8Array(v.buffer, v.byteOffset, v.byteLength), pk = reasm[u].feed(b);
@@ -342,6 +342,8 @@
   function record(q) {
     var s = S.sync; s.seen = Date.now();
     var ver = q[1], at = HR_AT[ver];
+    DG.vers[ver + '/' + q.length] = (DG.vers[ver + '/' + q.length] || 0) + 1;
+    if (DG.recs.length < 12 && (DG.vers[ver + '/' + q.length] <= 3)) DG.recs.push([Date.now(), 'r' + hx(q, 400)]);
     if (at == null || q.length < Math.max(at + 1, 20)) return;
     var hr = q[at], t = u32(q, 7) * 1000 + S.clockOff;
     if (!(t > Date.now() - 30 * 864e5 && t < Date.now() + 36e5)) return;
@@ -367,7 +369,7 @@
   }
   function startSync() {
     if (!S.cmd || (S.sync && S.sync.running)) return;
-    S.msg = null; S.detail = null; DG = { replies: [], types: {}, raw: [] };
+    S.msg = null; S.detail = null; DG = { replies: [], types: {}, raw: [], vers: {}, recs: [] };
     S.sync = { running: true, mins: {}, n: 0, secs: 0, first: 0, lastT: 0, savedTo: 0, days: {}, seen: Date.now(), chain: Promise.resolve(), started: Date.now() };
     if (S.view === 'main') render();
     var s = S.sync;
@@ -378,6 +380,8 @@
     (function watch() {
       if (S.sync !== s || !s.running) return;
       // the band went quiet: whatever arrived is saved (but not acked, so it comes again next time)
+      // records are arriving but none can be read: stop and send samples instead of waiting forever
+      if (!s.n && Date.now() - s.started > 30000) return endSync(false, ['warn', 'Your band is sending its history in a format this page doesn\'t read yet. Samples went to Claude to add it.']);
       if (Date.now() - s.seen > 25000) {
         if (!s.n) return endSync(false, ['warn', 'Your band didn\'t send its history. What it did say went to Claude to work out why.']);
         s.chain.then(function () { return flush(true); }).then(function (ok) { endSync(ok); }); return;
@@ -432,11 +436,11 @@
     });
   }
   function report() {
-    var t = []; for (var k in DG.types) t.push(k + 'x' + DG.types[k]);
-    var line = 'band said: ' + DG.replies.slice(-12).join(' ') + ' · heard ' + (t.join(' ') || 'nothing');
+    var t = [], vv = []; for (var k in DG.types) t.push(k + 'x' + DG.types[k]); for (var k2 in DG.vers) vv.push('v' + k2 + 'x' + DG.vers[k2]);
+    var line = 'band said: ' + DG.replies.slice(-12).join(' ') + ' · heard ' + (t.join(' ') || 'nothing') + (vv.length ? ' · records ' + vv.join(' ') : '');
     fetch('https://fwimdnukebbrwpwdyjbv.supabase.co/functions/v1/steptest', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ counted: 0, detected: 0, device: 'band-web ' + (S.name || ''), note: 'syncdiag ' + line,
-        frames: DG.raw.length ? DG.raw.map(function (r) { return [r[0], r[1].replace(/[^0-9a-f]/g, '') || '00']; }) : [[Date.now(), '00']] }) }).catch(function () {});
+        frames: DG.raw.concat(DG.recs).length ? DG.raw.concat(DG.recs).map(function (r) { return [r[0], r[1].replace(/[^0-9a-f]/g, '') || '00']; }) : [[Date.now(), '00']] }) }).catch(function () {});
     return line;
   }
   function endSync(ok, m) {
