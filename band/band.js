@@ -242,6 +242,7 @@
       if (j.band && !j.band.linked) S.msg = ['warn', 'Your account has no band set up yet. Set it up in LOCKED (Profile, then Wearables) once, then come back.'];
       if (j.band && j.band.last_minute && !(S.last && S.last.to)) S.last = { to: Date.parse(j.band.last_minute) + 60000, at: j.band.last_sync ? Date.parse(j.band.last_sync) : null };
       S.view = 'connect'; render();
+      if (qKeys().length) pump(); // history read last time but not yet in LOCKED
     }, function (e) { if (e.code === 'signed_out') { S.view = 'signin'; return render(); } S.view = 'connect'; render(); });
   }
 
@@ -336,6 +337,8 @@
       if (q[0] === 0x24) DG.replies.push(hx([q[2]], 1) + '=' + (q.length > 4 ? q[4] : '?'));
       if (DG.raw.length < 60 && q[0] !== 0x2F) DG.raw.push([Date.now(), u.slice(7, 8) + hx(q, 200)]);
       if (q[0] === 0x24 && pending[q[1]]) { var f = pending[q[1]]; delete pending[q[1]]; f(q); continue; }
+      if (q[0] >= 0x2F && q[0] <= 0x32) S.heard = Date.now();
+      if (S.probe) { onProbe(q); continue; }
       if (!S.sync || !S.sync.running) continue;
       if (q[0] === 0x2F) record(q);
       else if (q[0] === 0x31) meta(q);
@@ -359,86 +362,244 @@
     s.n++; if (!s.first || t < s.first) s.first = t; if (!s.lastT || t > s.lastT) s.lastT = t;
     if (s.n % 120 === 0) progress();
   }
+
+  // ---------- phone queue ----------
+  // Minutes read off the band are kept on the phone first, then the band is told it can move on.
+  // Uploads to LOCKED run alongside in big chunks, so the band never waits on the network.
+  // A closed page loses nothing: what's queued goes up next time the page opens.
+  var QP = 'lkband.q.', qn = 0, pumping = null;
+  function qKeys() { var k = []; try { for (var i = 0; i < localStorage.length; i++) { var x = localStorage.key(i); if (x && x.indexOf(QP) === 0) k.push(x); } } catch (e) {} return k.sort(); }
+  function qCount() {
+    if (S.qRows == null) { S.qRows = 0; qKeys().forEach(function (k) { try { S.qRows += (JSON.parse(localStorage.getItem(k)) || []).length; } catch (e) {} }); }
+    return S.qRows;
+  }
+  function enqueue(rows) {
+    if (!rows.length) return true;
+    qCount();
+    try {
+      for (var i = 0; i < rows.length; i += 200) {
+        localStorage.setItem(QP + Date.now() + '.' + (1000 + (qn++ % 9000)), JSON.stringify(rows.slice(i, i + 200)));
+        S.qRows += Math.min(200, rows.length - i);
+      }
+    } catch (e) { S.qRows = null; return false; }
+    pump(); return true;
+  }
+  function merge(rows) {
+    var by = {};
+    rows.forEach(function (r) {
+      var m = by[r[0]];
+      if (!m) { by[r[0]] = [r[0], r[1].slice(), r[2].slice()]; return; }
+      for (var i = 0; i < 60; i++) if (!m[1][i] && r[1][i]) m[1][i] = r[1][i];
+      m[2] = m[2].concat(r[2]).slice(0, 300);
+    });
+    return Object.keys(by).map(Number).sort(function (a, b) { return a - b; }).map(function (k) { return by[k]; });
+  }
+  function dev() { return { name: S.name || 'Whoop', model: 'WHOOP 4.0', battery: S.battery, connected: !!S.connected, last_seen: Date.now() }; }
+  function saved(top) {
+    S.savedTo = Math.max(S.savedTo || 0, top);
+    if (S.sync) { S.sync.savedTo = Math.max(S.sync.savedTo, top); progress(); }
+  }
+  // uploads everything queued; resolves true once the queue is empty, false if LOCKED can't be reached
+  function pump() {
+    if (pumping) return pumping;
+    pumping = (function loop() {
+      var keys = qKeys(); if (!keys.length) { S.qRows = 0; return Promise.resolve(true); }
+      var take = [], rows = [];
+      for (var i = 0; i < keys.length; i++) {
+        var v = null; try { v = JSON.parse(localStorage.getItem(keys[i])); } catch (e) {}
+        if (!Array.isArray(v)) v = [];
+        if (take.length && rows.length + v.length > 240) break;
+        take.push(keys[i]); rows = rows.concat(v);
+      }
+      var drop = function () { take.forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} }); S.qRows = Math.max(0, qCount() - rows.length); };
+      if (!rows.length) { drop(); return loop(); }
+      var ms = merge(rows);
+      S.qErr = null;
+      return tryApi({ minutes: ms, device: dev() }).then(function () {
+        drop(); saved(ms[ms.length - 1][0] + 60000);
+        return loop();
+      }, function (e) { S.qErr = e; if (S.sync) S.sync.err = e; return false; });
+    })().then(function (ok) { pumping = null; return ok; }, function () { pumping = null; return false; });
+    return pumping;
+  }
+  // keeps the phone queue to a sensible size: waits for uploads before taking more off the band
+  function room(n) {
+    n = n || 0;
+    if (qCount() <= 3000 || n > 150 || (S.qErr && S.qErr.code === 'signed_out')) return Promise.resolve();
+    pump(); return pause(400).then(function () { return room(n + 1); });
+  }
+  // takes finished minutes (or all of them) out of the sync, ready to queue
+  function take(s, all) {
+    var edge = all ? Infinity : Math.floor(s.lastT / 60000) * 60000;
+    return Object.keys(s.mins).map(Number).filter(function (k) { return k < edge; }).sort(function (a, b) { return a - b; }).map(function (k) {
+      var m = s.mins[k], d = new Date(k); delete s.mins[k];
+      s.days[dayOf(k)] = 1; if (d.getHours() >= 18) s.days[dayOf(k + 864e5)] = 1;
+      return [k, m.bpm, m.rr.slice(0, 300)];
+    });
+  }
+  // phone storage refused: straight to LOCKED, the old way
+  function direct(rows) {
+    var p = Promise.resolve(true);
+    for (var i = 0; i < rows.length; i += 240) (function (c) {
+      p = p.then(function (ok) {
+        if (!ok) return false;
+        return tryApi({ minutes: c, device: dev() }).then(function () { saved(c[c.length - 1][0] + 60000); return true; }, function (e) { if (S.sync) S.sync.err = e; return false; });
+      });
+    })(rows.slice(i, i + 240));
+    return p;
+  }
   function meta(q) {
     var s = S.sync, sub = q[2]; s.seen = Date.now();
     if (sub === 1) { s.got = 0; s.bad = 0; }
     else if (sub === 2 && q.length >= 21) {
       var tok = q.slice(13, 21);
       if (s.bad) {
-        s.chain = s.chain.then(function () { return flush(true); }).then(function () {
-          S.detail = report();
-          endSync(false, ['warn', 'Part of your band\'s history didn\'t read right, so it stays on the band. Samples went to Claude to fix it.']);
-        });
+        // something in this batch didn't read: keep what did, don't confirm, so the band keeps all of it
+        s.chain = s.chain.then(function () { S.detail = report(); return finish(s, ['warn', 'Part of your band\'s history didn\'t read right, so it stays on the band. Samples went to Claude to fix it.']); });
         return;
       }
-      s.chain = s.chain.then(function () { return flush(false); }).then(function (ok) {
-        if (ok) return send(0x17, [0x01].concat(tok));
-        endSync(false, ['bad', 'Couldn\'t save to LOCKED just now. Nothing is lost: your band keeps it until the next sync.']);
+      s.chain = s.chain.then(function () { return room(); }).then(function () {
+        if (!s.running) return;
+        var rows = take(s, false);
+        if (enqueue(rows)) return send(0x17, [0x01].concat(tok));
+        return direct(rows).then(function (ok) {
+          if (ok) return send(0x17, [0x01].concat(tok));
+          endSync(false, ['bad', 'Couldn\'t save to LOCKED just now. Nothing is lost: your band keeps it until the next sync.']);
+        });
       });
     } else if (sub === 3) {
-      s.chain = s.chain.then(function () { return flush(true); }).then(function (ok) { endSync(ok); });
+      s.chain = s.chain.then(function () { return finish(s); });
     }
   }
+  // end of a sync: queue the rest, wait for LOCKED to have all of it, then work out the last week
+  function finish(s, m) {
+    if (s.finishing) return s.finishing;
+    s.finishing = Promise.resolve().then(function () {
+      var rows = take(s, true);
+      return enqueue(rows) ? pump() : direct(rows);
+    }).then(function (ok) {
+      if (ok && qKeys().length) return pump();
+      return ok;
+    }).then(function (ok) {
+      if (!ok) {
+        if (s.err && (s.err.code === 'signed_out' || s.err.code === 'no_band')) return endSync(false);
+        return endSync(false, m || ['warn', 'Your band\'s history is on this phone. It goes to LOCKED as soon as you\'re back online.']);
+      }
+      return score(s).then(function () {
+        if (!m && S.skipped) return endSync(true, ['good', 'Caught up from where LOCKED left off. Older history stays on your band.']);
+        endSync(m ? false : true, m);
+      });
+    });
+    return s.finishing;
+  }
+
+  // ---------- skipping old history ----------
+  // The band keeps months of history and sends it oldest first. LOCKED only needs what it doesn't have yet,
+  // so the page moves the band's read position to just before that (never older than 30 days) and reads from there.
+  // Nothing on the band is erased: the older history stays on it.
+  function le32(n) { return [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]; }
+  function setPtr(p) { return send(0x21, le32(p), true).then(function (r) { return !!(r && r[4] === 1); }); }
+  function onProbe(q) {
+    var P = S.probe;
+    if (P.res && q[0] === 0x2F && HR_AT[q[1]] != null && q.length >= 20) { var r = P.res; P.res = null; r(u32(q, 7) * 1000 + S.clockOff); }
+    else if (P.res && q[0] === 0x31 && q[2] === 3) { var r2 = P.res; P.res = null; r2(null); }
+  }
+  function quiet(ms, max) {
+    var t0 = Date.now();
+    return (function w() { if (Date.now() - (S.heard || 0) >= ms || Date.now() - t0 > max) return Promise.resolve(); return pause(100).then(w); })();
+  }
+  // time of the first record at read position p (or null): read one record, then stop the band sending
+  function probe(p) {
+    return setPtr(p).then(function (ok) {
+      if (!ok) return null;
+      return new Promise(function (res) {
+        S.probe = { res: res };
+        setTimeout(function () { if (S.probe && S.probe.res) { S.probe.res = null; res(null); } }, 4000);
+        send(0x16, [0]);
+      }).then(function (t) {
+        return send(0x14, [0], true).then(function () { return quiet(500, 3000); }).then(function () { return t; });
+      });
+    });
+  }
+  function seek(s, r22) {
+    var target = Math.max((S.lockedTo || 0) - 15 * 60000, Date.now() - 30 * 864e5);
+    if (!r22 || r22.length < 26) return Promise.resolve();
+    var cur = u32(r22, 10), head = u32(r22, 6);
+    if (cur > 0xffff || head > 0xffff) return Promise.resolve();
+    var span = (head - cur + 0x10000) % 0x10000;
+    if (span < 100) return Promise.resolve();
+    var at = function (d) { return (cur + d) % 0x10000; };
+    var back = function () { return setPtr(cur); };
+    S.probe = {};
+    var g = $('sgot'); if (g) g.textContent = 'Finding where LOCKED left off…';
+    return probe(cur).then(function (t0) {
+      if (t0 == null || t0 >= target) return back();
+      return probe(at(span - 25)).then(function (te) {
+        // the newest stretch must be newer than the target, or this band counts differently: leave it as it was
+        if (te == null || te < target || te > Date.now() + 36e5) return back();
+        var lo = 0, hi = span - 25, tlo = t0, thi = te;
+        return (function step(n) {
+          if (hi - lo <= 25 || n > 18) {
+            return setPtr(at(lo)).then(function (ok) {
+              if (!ok) return back();
+              S.skipped = tlo;
+              try { localStorage.setItem('lkband.skipped', JSON.stringify({ from: cur, to: at(lo), at: Date.now() })); } catch (e) {}
+            });
+          }
+          var mid = lo + Math.max(5, Math.floor((hi - lo) / 10) * 5);
+          return probe(at(mid)).then(function (t) {
+            if (t == null || t < tlo || t > thi) return back(); // out of order: don't guess
+            if (t < target) { lo = mid; tlo = t; } else { hi = mid; thi = t; }
+            return step(n + 1);
+          });
+        })(0);
+      });
+    }).then(function () { S.probe = null; }, function () { S.probe = null; return back(); });
+  }
+
   function startSync() {
     if (!S.cmd || (S.sync && S.sync.running)) return;
-    S.msg = null; S.detail = null; DG = { replies: [], types: {}, raw: [], vers: {}, recs: [] };
+    S.msg = null; S.detail = null; S.skipped = 0; DG = { replies: [], types: {}, raw: [], vers: {}, recs: [] };
     S.sync = { running: true, mins: {}, n: 0, got: 0, bad: 0, secs: 0, first: 0, lastT: 0, savedTo: 0, days: {}, seen: Date.now(), chain: Promise.resolve(), started: Date.now() };
     if (S.view === 'main') render();
-    var s = S.sync;
-    send(0x23, [0], true).then(function () { return pause(120); }).then(function () { return send(0x4C, [0], true); })
-      .then(function () { return pause(120); }).then(function () { return send(0x22, [0], true); })
-      .then(function () { return pause(120); }).then(function () { return send(0x43, [1], true); })
-      .then(function () { return pause(120); }).then(function () { return send(0x16, [0], true); });
-    (function watch() {
+    var s = S.sync, r22 = null;
+    // what LOCKED already has, so the band only sends what's missing
+    var known = api({ action: 'status' }).then(function (j) { if (j.band && j.band.last_minute) S.lockedTo = Date.parse(j.band.last_minute) + 60000; }, function () {});
+    pump();
+    send(0x23, [0], true).then(function () { return send(0x4C, [0], true); })
+      .then(function () { return send(0x22, [0], true); }).then(function (r) { r22 = r; return send(0x43, [1], true); })
+      .then(function () { return known; })
+      .then(function () { return seek(s, r22); })
+      .then(function () {
+        if (S.sync !== s || !s.running) return;
+        s.started = s.seen = Date.now(); progress();
+        send(0x16, [0], true);
+        watch();
+      });
+    function watch() {
       if (S.sync !== s || !s.running) return;
-      // the band went quiet: whatever arrived is saved (but not acked, so it comes again next time)
       // records are arriving but none can be read: stop and send samples instead of waiting forever
-      if (!s.n && Date.now() - s.started > 30000) return endSync(false, ['warn', 'Your band is sending its history in a format this page doesn\'t read yet. Samples went to Claude to add it.']);
+      if (!s.n && Date.now() - s.started > 30000) { S.detail = report(); return finish(s, ['warn', 'Your band is sending its history in a format this page doesn\'t read yet. Samples went to Claude to add it.']); }
+      // the band went quiet: whatever arrived is saved (the last batch isn't confirmed, so it comes again next time)
       if (Date.now() - s.seen > 25000) {
-        if (!s.n) return endSync(false, ['warn', 'Your band didn\'t send its history. What it did say went to Claude to work out why.']);
-        s.chain.then(function () { return flush(true); }).then(function (ok) { endSync(ok); }); return;
+        if (!s.n) { S.detail = report(); return finish(s, s.got ? null : ['warn', 'Your band didn\'t send its history. What it did say went to Claude to work out why.']); }
+        return s.chain.then(function () { return finish(s); });
       }
       setTimeout(watch, 2000);
-    })();
+    }
   }
   function progress() {
     var s = S.sync; if (!s) return;
     s.secs = s.n;
-    var span = s.lastT && s.first ? (s.lastT - s.first) : 0, sinceLast = s.first && S.last && S.last.to ? Date.now() - Math.min(S.last.to, s.first) : 0;
+    var span = s.lastT && s.first ? (s.lastT - s.first) : 0;
     s.pct = s.first ? Math.min(0.97, span / Math.max(1, Date.now() - s.first)) : 0;
-    if (sinceLast && s.first > Date.now() - 864e5) s.pct = Math.min(0.97, span / sinceLast);
     var g = $('sgot'), f = $('barf'), sv = $('ssaved');
-    if (g) g.textContent = dur(s.secs) + ' received';
+    if (g && s.n) g.textContent = dur(s.secs) + ' received';
     if (f) f.style.width = Math.round(Math.max(0.04, s.pct) * 100) + '%';
     if (sv) sv.textContent = s.savedTo ? 'saved up to ' + when(s.savedTo) : '';
   }
   function tz() { return -new Date().getTimezoneOffset(); }
   function dayOf(ms) { var d = new Date(ms); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
-  // Sends every finished minute (and, at the end, every minute) to LOCKED in chunks. Resolves true when all saved.
-  function flush(final) {
-    var s = S.sync, keys = Object.keys(s.mins).map(Number).sort(function (a, b) { return a - b; });
-    if (!keys.length) return final ? score(s) : Promise.resolve(true);
-    var rows = keys.map(function (k) {
-      var m = s.mins[k], d = new Date(k);
-      s.days[dayOf(k)] = 1; if (d.getHours() >= 18) s.days[dayOf(k + 864e5)] = 1;
-      return [k, m.bpm, m.rr.slice(0, 300)];
-    });
-    var chunks = []; for (var i = 0; i < rows.length; i += 240) chunks.push(rows.slice(i, i + 240));
-    var dev = { name: S.name || 'Whoop', model: 'WHOOP 4.0', battery: S.battery, connected: true, last_seen: Date.now() };
-    var p = Promise.resolve(true);
-    chunks.forEach(function (c, i) {
-      p = p.then(function (ok) {
-        if (!ok) return false;
-        var last = final && i === chunks.length - 1;
-        return tryApi({ minutes: c, device: dev, score: last && recentDays(s).length ? { days: recentDays(s), tz_offset_min: tz() } : undefined }).then(function () {
-          c.forEach(function (r) { delete s.mins[r[0]]; });
-          s.savedTo = Math.max(s.savedTo, c[c.length - 1][0] + 60000); progress();
-          return true;
-        }, function (e) { s.err = e; return false; });
-      });
-    });
-    return p;
-  }
   function recentDays(s) { var lim = dayOf(Date.now() - 7 * 864e5); return Object.keys(s.days).filter(function (d) { return d >= lim; }).sort().slice(-7); }
   function score(s) { var d = recentDays(s); if (!d.length) return Promise.resolve(true); return tryApi({ score: { days: d, tz_offset_min: tz() } }).then(function () { return true; }, function () { return true; }); }
   function tryApi(body, n) {
@@ -460,9 +621,8 @@
   function endSync(ok, m) {
     var s = S.sync; if (!s || !s.running) return;
     s.running = false;
-    if (!s.n) S.detail = report();
-    if (ok !== false && s.savedTo) {
-      S.last = { to: s.savedTo, at: Date.now(), secs: s.n };
+    if (s.savedTo) {
+      S.last = { to: Math.max(s.savedTo, (S.last && S.last.to) || 0), at: Date.now(), secs: s.n };
       try { localStorage.setItem(LAST, JSON.stringify(S.last)); } catch (e) {}
     }
     if (s.err && s.err.code === 'signed_out') { S.view = 'signin'; S.msg = ['warn', 'Sign in again to keep syncing.']; return render(); }
