@@ -143,7 +143,7 @@
     bind();
   }
   function lockedUrl() { return /locked/.test(location.host) ? '/' : 'https://locked-seven.vercel.app/'; }
-  function msg() { return S.msg ? '<div class="msg msg--' + S.msg[0] + '" role="status">' + S.msg[1] + '</div>' : ''; }
+  function msg() { return S.msg ? '<div class="msg msg--' + S.msg[0] + '" role="status">' + S.msg[1] + (S.detail ? '<div class="diag">' + esc(S.detail) + '</div>' : '') + '</div>' : ''; }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function clock(d) { var h = d.getHours(), m = d.getMinutes(); return (h % 12 || 12) + ':' + (m < 10 ? '0' : '') + m; }
   function when(ms) {
@@ -323,10 +323,16 @@
   }
 
   // ---------- history ----------
+  // what the band said, for a sync that gets nothing
+  var DG = { replies: [], types: {}, raw: [] };
+  function hx(a, n) { var s = ''; for (var i = 0; i < Math.min(a.length, n); i++) s += (a[i] < 16 ? '0' : '') + a[i].toString(16); return s; }
   function onData(u, v) {
     var b = new Uint8Array(v.buffer, v.byteOffset, v.byteLength), pk = reasm[u].feed(b);
     for (var i = 0; i < pk.length; i++) {
-      var q = pk[i];
+      var q = pk[i], k = u.slice(7, 8) + ':' + hx([q[0]], 1);
+      DG.types[k] = (DG.types[k] || 0) + 1;
+      if (q[0] === 0x24) DG.replies.push(hx([q[2]], 1) + '=' + (q.length > 4 ? q[4] : '?'));
+      if (DG.raw.length < 60 && q[0] !== 0x2F) DG.raw.push([Date.now(), u.slice(7, 8) + hx(q, 200)]);
       if (q[0] === 0x24 && pending[q[1]]) { var f = pending[q[1]]; delete pending[q[1]]; f(q); continue; }
       if (!S.sync || !S.sync.running) continue;
       if (q[0] === 0x2F) record(q);
@@ -361,7 +367,7 @@
   }
   function startSync() {
     if (!S.cmd || (S.sync && S.sync.running)) return;
-    S.msg = null;
+    S.msg = null; S.detail = null; DG = { replies: [], types: {}, raw: [] };
     S.sync = { running: true, mins: {}, n: 0, secs: 0, first: 0, lastT: 0, savedTo: 0, days: {}, seen: Date.now(), chain: Promise.resolve(), started: Date.now() };
     if (S.view === 'main') render();
     var s = S.sync;
@@ -372,7 +378,10 @@
     (function watch() {
       if (S.sync !== s || !s.running) return;
       // the band went quiet: whatever arrived is saved (but not acked, so it comes again next time)
-      if (Date.now() - s.seen > 25000) { s.chain.then(function () { return flush(true); }).then(function (ok) { endSync(ok, s.n ? null : ['warn', 'Your band had nothing new to send.']); }); return; }
+      if (Date.now() - s.seen > 25000) {
+        if (!s.n) return endSync(false, ['warn', 'Your band didn\'t send its history. What it did say went to Claude to work out why.']);
+        s.chain.then(function () { return flush(true); }).then(function (ok) { endSync(ok); }); return;
+      }
       setTimeout(watch, 2000);
     })();
   }
@@ -422,9 +431,18 @@
       throw e;
     });
   }
+  function report() {
+    var t = []; for (var k in DG.types) t.push(k + 'x' + DG.types[k]);
+    var line = 'band said: ' + DG.replies.slice(-12).join(' ') + ' · heard ' + (t.join(' ') || 'nothing');
+    fetch('https://fwimdnukebbrwpwdyjbv.supabase.co/functions/v1/steptest', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ counted: 0, detected: 0, device: 'band-web ' + (S.name || ''), note: 'syncdiag ' + line,
+        frames: DG.raw.length ? DG.raw.map(function (r) { return [r[0], r[1].replace(/[^0-9a-f]/g, '') || '00']; }) : [[Date.now(), '00']] }) }).catch(function () {});
+    return line;
+  }
   function endSync(ok, m) {
     var s = S.sync; if (!s || !s.running) return;
     s.running = false;
+    if (!s.n) S.detail = report();
     if (ok !== false && s.savedTo) {
       S.last = { to: s.savedTo, at: Date.now(), secs: s.n };
       try { localStorage.setItem(LAST, JSON.stringify(S.last)); } catch (e) {}
