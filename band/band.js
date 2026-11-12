@@ -116,8 +116,8 @@
         '<div class="spacer"></div><button class="btn btn--go" id="go"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? 'One moment…' : S.usePw ? 'Sign in' : 'Email me a code') + '</button>' +
         '<button class="link" id="mode">' + (S.usePw ? 'Use a code instead' : 'Use my password instead') + '</button></div>';
     } else if (v === 'code') {
-      h = '<div class="view"><div class="top"><div class="lab">LOCKED · Band</div><h1>Check your email</h1><p class="sub">We sent a six-digit code to <b>' + esc(S.email) + '</b>.</p></div>' +
-        '<form class="card form" id="f2" novalidate><label for="cd">Code</label><input id="cd" class="codein" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"></form>' + msg() +
+      h = '<div class="view"><div class="top"><div class="lab">LOCKED · Band</div><h1>Check your email</h1><p class="sub">We emailed <b>' + esc(S.email) + '</b>. Type the six-digit code. If the email has a sign-in link instead, don\'t open it: press and hold it, tap Copy Link, and paste it here.</p></div>' +
+        '<form class="card form" id="f2" novalidate><label for="cd">Code or link</label><input id="cd" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="123456 or paste the link"></form>' + msg() +
         '<div class="spacer"></div><button class="btn btn--go" id="verify"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? 'Checking…' : 'Sign in') + '</button><button class="link" id="back">Use a different email</button></div>';
     } else if (v === 'connect') {
       h = '<div class="view"><div class="top"><div class="lab">LOCKED · Band</div><h1>Connect your band</h1><p class="sub">Your band keeps everything it measured. This fills LOCKED in, from the last time it synced.</p></div>' +
@@ -185,7 +185,7 @@
     on('go', 'click', signIn); on('f1', 'submit', function (e) { e.preventDefault(); signIn(); });
     on('mode', 'click', function () { S.usePw = !S.usePw; S.msg = null; keepEmail(); render(); });
     on('verify', 'click', verify); on('f2', 'submit', function (e) { e.preventDefault(); verify(); });
-    on('cd', 'input', function (e) { if (/^\d{6}$/.test(e.target.value)) verify(); });
+    on('cd', 'input', function (e) { var v = e.target.value.trim(); if (/^\d{6}$/.test(v) || /token=|access_token=/.test(v)) verify(); });
     on('back', 'click', function () { S.view = 'signin'; S.msg = null; render(); });
     on('conn', 'click', function () { connect(false); }); on('all', 'click', function () { connect(true); });
     on('out', 'click', function () { try { localStorage.removeItem(SKEY); } catch (e) {} S.view = 'signin'; S.msg = null; render(); });
@@ -215,14 +215,24 @@
       S.msg = ['bad', r.status === 429 ? 'That\'s a lot of codes. Wait a minute, then try again.' : 'No LOCKED account uses that email.']; render();
     }, net);
   }
+  // A pasted link works too: the email's own link (token in it) or the page it opened (session in it).
+  function fromLink(t) {
+    var m = /[#&?]access_token=([^&]+)/.exec(t), rt = /[#&?]refresh_token=([^&]+)/.exec(t), ex = /[#&?]expires_in=(\d+)/.exec(t);
+    if (m) return { session: { access_token: decodeURIComponent(m[1]), refresh_token: rt ? decodeURIComponent(rt[1]) : null, expires_in: ex ? +ex[1] : 3600 } };
+    var tk = /[?&]token(?:_hash)?=([^&#]+)/.exec(t), ty = /[?&]type=([^&#]+)/.exec(t);
+    if (tk) return { hash: decodeURIComponent(tk[1]), type: ty ? decodeURIComponent(ty[1]) : 'magiclink' };
+    return null;
+  }
   function verify() {
     var c = (($('cd') || {}).value || '').trim();
-    if (!/^\d{6}$/.test(c)) { S.msg = ['bad', 'The code is six digits.']; return render(); }
+    var L = /^\d{6}$/.test(c) ? null : fromLink(c);
+    if (L && L.session) { keep(L.session); return afterSignIn(); }
+    if (!L && !/^\d{6}$/.test(c)) { S.msg = ['bad', 'Type the six-digit code, or paste the whole link from the email.']; return render(); }
     S.busy = true; S.msg = null; render();
-    auth('verify', { type: 'email', email: S.email, token: c }).then(function (r) {
+    auth('verify', L ? { type: L.type === 'signup' ? 'signup' : 'magiclink', token_hash: L.hash } : { type: 'email', email: S.email, token: c }).then(function (r) {
       S.busy = false;
       if (r.ok && r.j.access_token) { keep(r.j); return afterSignIn(); }
-      S.msg = ['bad', 'That code didn\'t work. Check it, or go back and get a new one.']; render();
+      S.msg = ['bad', L ? 'That link has expired or was already used. Go back, get a new one, and paste it without opening it.' : 'That code didn\'t work. Check it, or go back and get a new one.']; render();
     }, net);
   }
   function net() { S.busy = false; S.msg = ['bad', 'No connection. Check your signal and try again.']; render(); }
