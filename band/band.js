@@ -458,7 +458,13 @@
     var s = S.sync, sub = q[2]; s.seen = Date.now();
     if (sub === 1) { s.got = 0; s.bad = 0; }
     else if (sub === 2 && q.length >= 21) {
-      var tok = q.slice(13, 21);
+      var tok = q.slice(13, 21), tk = hx(tok, 8);
+      // the band sends the same batch again when it didn't take our "got it": stop instead of looping forever
+      s.same = tk === s.tok ? (s.same || 0) + 1 : 0; s.tok = tk;
+      if (s.same >= 3) {
+        s.chain = s.chain.then(function () { S.detail = report(); return finish(s, ['warn', 'Your band keeps resending the same stretch. What arrived is saved. Sync again in a few minutes.']); });
+        return;
+      }
       if (s.bad) {
         // something in this batch didn't read: keep what did, don't confirm, so the band keeps all of it
         s.chain = s.chain.then(function () { S.detail = report(); return finish(s, ['warn', 'Part of your band\'s history didn\'t read right, so it stays on the band. Samples went to Claude to fix it.']); });
