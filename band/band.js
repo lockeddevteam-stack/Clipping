@@ -53,6 +53,7 @@
   function u32(b, o) { return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0; }
   function i16(b, o) { var v = b[o] | (b[o + 1] << 8); return v & 0x8000 ? v - 0x10000 : v; }
   var HR_AT = { 7: 27, 9: 17, 12: 17, 18: 14, 24: 17 };
+  var SKIP = { 25: 76 };
 
   // ---------- state ----------
   var S = {
@@ -346,6 +347,7 @@
     DG.vers[ver + '/' + q.length] = (DG.vers[ver + '/' + q.length] || 0) + 1;
     if (DG.recs.length < 12 && (DG.vers[ver + '/' + q.length] <= 3)) DG.recs.push([Date.now(), 'r' + hx(q, 400)]);
     s.got++;
+    if (SKIP[ver] === q.length) return; // motion records (v25): no heart rate in them, safe to pass over
     if (at == null || q.length < Math.max(at + 1, 20)) { s.bad++; return; }
     var hr = q[at], t = u32(q, 7) * 1000 + S.clockOff;
     if (!(t > 1.6e12 && t < Date.now() + 36e5)) { s.bad++; return; }
