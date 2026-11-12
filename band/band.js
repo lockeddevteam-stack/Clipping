@@ -528,47 +528,54 @@
     });
   }
   function seek(s, r22) {
-    var target = Math.max((S.lockedTo || 0) - 15 * 60000, Date.now() - 30 * 864e5);
-    if (!r22 || r22.length < 26) return Promise.resolve();
-    var cur = u32(r22, 10), head = u32(r22, 6);
-    if (cur > 0xffff || head > 0xffff) return Promise.resolve();
-    var span = (head - cur + 0x10000) % 0x10000;
-    if (span < 100) return Promise.resolve();
-    var at = function (d) { return (cur + d) % 0x10000; };
+    var now = Date.now(), target = Math.max((S.lockedTo || 0) - 15 * 60000, now - 30 * 864e5);
+    if (!r22 || r22.length < 14) return Promise.resolve();
+    var cur = u32(r22, 10), lo = cur, tlo = 0, probes = 0;
     var back = function () { return setPtr(cur); };
+    var bad = function (t) { return t != null && (t < tlo || t > now + 36e5); };
     S.probe = {};
     var g = $('sgot'); if (g) g.textContent = 'Finding where LOCKED left off…';
-    return probe(cur).then(function (t0) {
-      if (t0 == null || t0 >= target) return back();
-      return probe(at(span - 25)).then(function (te) {
-        // the newest stretch must be newer than the target, or this band counts differently: leave it as it was
-        if (te == null || te < target || te > Date.now() + 36e5) return back();
-        var lo = 0, hi = span - 25, tlo = t0, thi = te;
-        return (function step(n) {
-          if (hi - lo <= 25 || n > 18) {
-            return setPtr(at(lo)).then(function (ok) {
-              if (!ok) return back();
-              S.skipped = tlo;
-              try { localStorage.setItem('lkband.skipped', JSON.stringify({ from: cur, to: at(lo), at: Date.now() })); } catch (e) {}
-            });
-          }
-          var mid = lo + Math.max(5, Math.floor((hi - lo) / 10) * 5);
-          return probe(at(mid)).then(function (t) {
-            if (t == null || t < tlo || t > thi) return back(); // out of order: don't guess
-            if (t < target) { lo = mid; tlo = t; } else { hi = mid; thi = t; }
-            return step(n + 1);
-          });
-        })(0);
+    function land() {
+      return setPtr(lo).then(function (ok) {
+        if (!ok) return back();
+        if (lo !== cur) { S.skipped = tlo; try { localStorage.setItem('lkband.skipped', JSON.stringify({ from: cur, to: lo, at: Date.now() })); } catch (e) {} }
       });
+    }
+    // halves the gap between lo (before the target) and hi (at or after it, or past the end)
+    function bisect(hi) {
+      if (++probes > 45 || ((hi - lo) >>> 0) <= 25) return land();
+      var mid = (lo + Math.max(5, Math.floor(((hi - lo) >>> 0) / 10) * 5)) >>> 0;
+      return probe(mid).then(function (t) {
+        if (bad(t)) return back(); // out of order: don't guess
+        if (t != null && t < target) { lo = mid; tlo = t; } else hi = mid;
+        return bisect(hi);
+      });
+    }
+    // jumps ahead in growing steps until it passes the target or the end of what the band holds
+    function gallop(jump) {
+      if (++probes > 24) return back();
+      var p = (lo + jump) >>> 0;
+      return probe(p).then(function (t) {
+        if (bad(t)) return back();
+        if (t != null && t < target) { lo = p; tlo = t; return gallop(jump * 2); }
+        return bisect(p);
+      });
+    }
+    return probe(cur).then(function (t0) {
+      if (t0 == null || t0 >= target) return back(); // already recent, or the band can't jump
+      tlo = t0;
+      return gallop(500);
     }).then(function () { S.probe = null; }, function () { S.probe = null; return back(); });
   }
 
   // The band's clock can be days off. The newest record time in the data range reply is the band's "now",
   // so the gap to the phone's clock is how far every record's time has to move.
   function clockFromRange(r) {
-    if (!r || r.length < 68) return;
-    var best = 0;
-    for (var o = 40; o + 4 <= r.length; o += 8) { var v = u32(r, o); if (v > 1.6e9 && v < 2.2e9 && v > best) best = v; }
+    if (!r || r.length < 24) return;
+    // the reply holds (time, count) pairs; its layout shifts between bands, so look at every position
+    // for a time within the last 400 days that is followed by a small count
+    var now = Date.now() / 1000, best = 0;
+    for (var o = 4; o + 8 <= r.length; o++) { var v = u32(r, o), nx = u32(r, o + 4); if (v > now - 400 * 86400 && v < now + 86400 && nx < 0x100000 && v > best) best = v; }
     if (!best) return;
     var off = Date.now() - best * 1000;
     S.clockOff = Math.abs(off) > 120000 ? off : 0;
