@@ -255,8 +255,9 @@
       : c.writeValueWithoutResponse ? c.writeValueWithoutResponse(p) : c.writeValue(p);
     if (!wait) return w.then(function () { return null; }, function () { return null; });
     return new Promise(function (res) {
-      pending[sq] = res;
-      setTimeout(function () { if (pending[sq]) { delete pending[sq]; res(null); } }, 2000);
+      pending[sq] = res; res.op = op;
+      // the band can take a few seconds to answer
+      setTimeout(function () { if (pending[sq]) { delete pending[sq]; res(null); } }, 6000);
       w.catch(function () { if (pending[sq]) { delete pending[sq]; res(null); } });
     });
   }
@@ -336,7 +337,12 @@
       DG.types[k] = (DG.types[k] || 0) + 1;
       if (q[0] === 0x24) DG.replies.push(hx([q[2]], 1) + '=' + (q.length > 4 ? q[4] : '?'));
       if (DG.raw.length < 60 && q[0] !== 0x2F) DG.raw.push([Date.now(), u.slice(7, 8) + hx(q, 200)]);
-      if (q[0] === 0x24 && pending[q[1]]) { var f = pending[q[1]]; delete pending[q[1]]; f(q); continue; }
+      if (q[0] === 0x24) {
+        // match by sequence number; if the band numbers its answers differently, by command
+        var key = pending[q[1]] ? q[1] : null;
+        if (key == null) for (var pk2 in pending) if (pending[pk2].op === q[2]) { key = pk2; break; }
+        if (key != null) { var f = pending[key]; delete pending[key]; f(q); continue; }
+      }
       if (q[0] >= 0x2F && q[0] <= 0x32) S.heard = Date.now();
       if (S.probe) { onProbe(q); continue; }
       if (!S.sync || !S.sync.running) continue;
