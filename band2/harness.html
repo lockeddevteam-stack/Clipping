@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Band Counter Bench</title>
+<style>
+:root{--bg:#0E0B09;--card:rgba(246,238,231,.055);--line:rgba(246,238,231,.09);--text:#F6EEE7;--text2:rgba(246,238,231,.64);--text3:rgba(246,238,231,.42);--accent:#FF7A1A;--good:#4CD38A;--bad:#FF5A5F;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,system-ui,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:24px 16px 60px}
+h1{font:800 28px/1.1 -apple-system,system-ui;letter-spacing:-.02em;margin:0 0 6px}
+p{color:var(--text2);margin:0 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:14px;margin-bottom:12px}
+.ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:end}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text3)}
+select,input{height:38px;border-radius:10px;border:1px solid var(--line);background:rgba(246,238,231,.05);color:var(--text);padding:0 10px;font:14px system-ui;min-width:90px}
+button{height:38px;border-radius:999px;border:0;background:var(--accent);color:#1a0d04;font:700 14px system-ui;padding:0 16px;cursor:pointer}
+button.soft{background:rgba(246,238,231,.08);color:var(--text)}
+canvas{display:block;width:100%;height:220px}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+td,th{padding:6px 8px;border-top:1px solid var(--line);text-align:right}
+th{color:var(--text3);font:600 11px ui-monospace,Menlo;letter-spacing:.08em;text-transform:uppercase}
+td:first-child,th:first-child{text-align:left}
+.ok{color:var(--good)} .off{color:var(--bad)}
+.big{font:800 40px/1 ui-rounded,system-ui;font-variant-numeric:tabular-nums}
+.row{display:flex;gap:24px;align-items:center;flex-wrap:wrap}
+.mono{font:12px ui-monospace,Menlo;color:var(--text2)}
+</style>
+</head>
+<body>
+<main>
+<h1>Counter bench</h1>
+<p>Replays wrist motion through the same rep and step counters the band page runs. Synthetic lifts, or a capture from the band.</p>
+<div class="card ctl">
+  <label>Motion<select id="kind"></select></label>
+  <label>Reps / steps<input id="reps" type="number" value="10" min="1" max="60"></label>
+  <label>Seconds per rep<input id="period" type="number" value="2.4" step="0.1" min="0.8" max="6"></label>
+  <label>Noise (g)<input id="noise" type="number" value="0.02" step="0.01" min="0" max="0.2"></label>
+  <label>Seed<input id="seed" type="number" value="7"></label>
+  <label>Counter<select id="counter"></select></label>
+  <button id="run" data-testid="bench-run">Run</button>
+  <button class="soft" id="sweep" data-testid="bench-sweep">Run every lift</button>
+  <label>Capture file (JSON)<input id="file" type="file" accept=".json,application/json"></label>
+</div>
+<div class="card"><div class="row"><div><div class="big" id="got" data-testid="bench-got">-</div><div class="mono">counted</div></div><div><div class="big" id="truth">-</div><div class="mono">truth</div></div><div class="mono" id="info"></div></div>
+<canvas id="plot"></canvas></div>
+<div class="card"><table id="tab" data-testid="bench-table"></table></div>
+</main>
+<script src="core.js?v=1"></script>
+<script>
+(function () {
+  var C = BandCore, $ = function (s) { return document.querySelector(s); };
+  var kinds = ['curl', 'hammer', 'raise', 'press', 'row', 'squat', 'lunge', 'walk', 'run', 'legext', 'rest'];
+  $('#kind').innerHTML = kinds.map(function (k) { return '<option>' + k + '</option>'; }).join('');
+  $('#counter').innerHTML = C.EXERCISES.filter(function (e) { return e.countable; }).map(function (e) { return '<option value="' + e.id + '">' + e.name + '</option>'; }).join('') + '<option value="steps">Steps</option>';
+  $('#kind').onchange = function () { var k = $('#kind').value; if (C.exercise(k) && C.exercise(k).countable) $('#counter').value = k; if (k === 'walk' || k === 'run') $('#counter').value = 'steps'; };
+
+  function counterFor(id, trace) { return id === 'steps' ? new C.StepCounter() : new C.RepCounter(id, { trace: trace }); }
+  /* rows through real frames: encode as R10, cut into notifications, reassemble, parse, resample, count */
+  function runRows(rows, fs, id) {
+    var R = new C.Reassembler(), P = new C.MotionParser(), Rs = new C.Resampler(), cnt = counterFor(id, true), ev = [], n = 0, sig = [], t = 0, seq = 0;
+    function feed(chunks) { chunks.forEach(function (ch) { R.feed(ch, t).forEach(function (pk) { var m = P.parse(pk, t); if (!m) return; var rr = []; for (var i = 0; i < m.n; i++) rr.push([m.ax[i], m.ay[i], m.az[i]]); Rs.push(rr, fs, sample); }); }); }
+    function sample(v) { n++; sig.push(v); var g = cnt.push(v[0], v[1], v[2]); if (g) for (var k = 0; k < g; k++) ev.push(n / C.FS); }
+    for (var i = 0; i + 100 <= rows.length; i += 100) { var f = C.frameR10(rows.slice(i, i + 100), seq++), ch = []; for (var o = 0; o < f.length; o += 182) ch.push(f.slice(o, o + 182)); feed(ch); t += 100 / fs * 1000; }
+    R.flush().forEach(function (pk) { var m = P.parse(pk, t); if (m) { var rr = []; for (var i2 = 0; i2 < m.n; i2++) rr.push([m.ax[i2], m.ay[i2], m.az[i2]]); Rs.push(rr, fs, sample); } });
+    return { events: ev, sig: sig, trace: cnt.trace, count: id === 'steps' ? cnt.steps : cnt.reps, parsed: P.parsed };
+  }
+  function plot(res, truth) {
+    var c = $('#plot'), r = c.getBoundingClientRect(), d = devicePixelRatio || 1; c.width = r.width * d; c.height = r.height * d;
+    var g = c.getContext('2d'); g.scale(d, d); var n = res.sig.length; if (!n) return;
+    var X = function (i) { return i / n * r.width; };
+    ['#FF7A1A', '#4CD38A', '#7B6DFF'].forEach(function (col, a) {
+      g.beginPath(); res.sig.forEach(function (v, i) { var y = r.height * 0.5 - (v[a] - res.sig[0][a]) * r.height * 0.22; i ? g.lineTo(X(i), y) : g.moveTo(X(i), y); }); g.strokeStyle = col; g.globalAlpha = .7; g.stroke();
+    });
+    g.globalAlpha = 1;
+    if (res.trace) { g.beginPath(); res.trace.forEach(function (tr, i) { var y = r.height * 0.85 - tr[0] * r.height * 0.25; i ? g.lineTo(X(i), y) : g.moveTo(X(i), y); }); g.strokeStyle = '#F6EEE7'; g.lineWidth = 1.2; g.stroke(); }
+    (truth || []).forEach(function (t) { var x = t * C.FS / n * r.width; g.fillStyle = 'rgba(246,238,231,.35)'; g.fillRect(x - 1, 0, 2, 14); });
+    res.events.forEach(function (t) { var x = t * C.FS / n * r.width; g.fillStyle = '#FF7A1A'; g.beginPath(); g.arc(x, 22, 5, 0, 7); g.fill(); });
+  }
+  function one() {
+    var k = $('#kind').value, id = $('#counter').value, o = { reps: +$('#reps').value, steps: +$('#reps').value, period: +$('#period').value, noise: +$('#noise').value, seed: +$('#seed').value, seconds: 30 };
+    var s = C.synth(k, o), res = runRows(s.rows, s.fs, id);
+    $('#got').textContent = res.count; $('#truth').textContent = s.reps.length;
+    $('#got').className = 'big ' + (res.count === s.reps.length ? 'ok' : 'off');
+    $('#info').textContent = (s.rows.length / s.fs).toFixed(1) + ' s of motion, ' + res.parsed + ' frames through the band path. Ticks on top: real reps. Dots: counted.';
+    plot(res, s.reps); return res;
+  }
+  function sweep() {
+    var rowsH = '<tr><th>Lift</th><th>Seeds</th><th>Exact</th><th>Within 1</th><th>Misses</th></tr>', all = 0, ex = 0;
+    ['curl', 'hammer', 'raise', 'press', 'row', 'squat', 'lunge'].forEach(function (k) {
+      var n = 0, e = 0, w = 0, miss = [];
+      for (var seed = 10; seed < 30; seed++) {
+        var reps = 6 + seed % 7, o = { reps: reps, seed: seed, period: (k === 'squat' || k === 'lunge' ? 2.6 : 1.7) + (seed % 5) * 0.35, noise: 0.01 + 0.01 * (seed % 5), tilt0: (seed % 4) * 0.3, restBetween: seed % 6 === 0 ? 2.5 : 0, fatigue: seed % 3 === 0 };
+        var s = C.synth(k, o), got = runRows(s.rows, s.fs, k).count; n++; if (got === reps) e++; else miss.push(reps + '→' + got); if (Math.abs(got - reps) <= 1) w++;
+      }
+      all += n; ex += e;
+      rowsH += '<tr><td>' + C.exercise(k).name + '</td><td>' + n + '</td><td class="' + (e / n >= .9 ? 'ok' : 'off') + '">' + e + '</td><td>' + w + '</td><td class="mono">' + (miss.join(' ') || '-') + '</td></tr>';
+    });
+    rowsH += '<tr><td><b>All</b></td><td>' + all + '</td><td><b>' + ex + '</b></td><td></td><td></td></tr>';
+    $('#tab').innerHTML = rowsH; return { all: all, exact: ex };
+  }
+  /* A capture from the steptest store: { frames: [[t, hex], ...], meta } or the raw array. */
+  $('#file').onchange = function () {
+    var f = this.files[0]; if (!f) return;
+    f.text().then(function (txt) {
+      var j = JSON.parse(txt), frames = Array.isArray(j) ? j : j.frames, id = $('#counter').value;
+      var R = new C.Reassembler(), P = new C.MotionParser(), Rs = new C.Resampler(), cnt = counterFor(id, true), sig = [], ev = [], n = 0;
+      frames.forEach(function (fr) { R.feed(C.unhex(fr[1]), fr[0]).forEach(function (pk) { var m = P.parse(pk, fr[0]); if (!m) return; var fs = Rs.rate(m.n, fr[0]) || 200, rr = []; for (var i = 0; i < m.n; i++) rr.push([m.ax[i], m.ay[i], m.az[i]]); Rs.push(rr, fs, function (v) { n++; sig.push(v); if (cnt.push(v[0], v[1], v[2])) ev.push(n / C.FS); }); }); });
+      var count = id === 'steps' ? cnt.steps : cnt.reps;
+      $('#got').textContent = count; $('#truth').textContent = (j.counted != null ? j.counted : (j.meta && j.meta.counted)) || '?';
+      $('#info').textContent = P.parsed + ' motion frames, layout ' + Object.keys(P.base).map(function (k) { return k + ' offset ' + P.base[k]; }).join(', ') + '. Unknown: ' + JSON.stringify(P.unknown);
+      plot({ sig: sig, trace: cnt.trace, events: ev });
+    });
+  };
+  $('#run').onclick = one; $('#sweep').onclick = sweep;
+  window.__bench = { one: one, sweep: sweep };
+  one();
+})();
+</script>
+</body>
+</html>
